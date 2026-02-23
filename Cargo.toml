@@ -1,0 +1,50 @@
+[package]
+name = "devboy-agent-usage"
+version = "0.1.0"
+edition = "2021"
+description = "Анализ использования AI-агентов (Claude Code) с корреляцией ActivityWatch"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Сериализация
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Дата/время
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["serde", "v4"] }
+
+# SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Таблицы в терминале
+comfy-table = "7"
+
+# Цвета
+colored = "3"
+
+# Прогресс
+indicatif = "0.17"
+
+# Ошибки
+anyhow = "1"
+thiserror = "2"
+
+# Глоб
+glob = "0.3"
+
+# Параллелизм
+rayon = "1.10"
+
+# Sync HTTP клиент для LLM API
+ureq = { version = "3", features = ["json"] }
+
+# Домашняя директория
+dirs = "6"
+
+# Регулярные выражения (для извлечения task ID из git branch)
+regex = "1"
