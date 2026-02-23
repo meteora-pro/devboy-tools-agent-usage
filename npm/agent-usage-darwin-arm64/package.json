@@ -1,0 +1,14 @@
+{
+  "name": "@devboy-tools/agent-usage-darwin-arm64",
+  "version": "0.0.0",
+  "description": "devboy-agent-usage binary for macOS ARM64",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meteora-pro/devboy-agent-usage.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/devboy-agent-usage"],
+  "preferUnplugged": true
+}

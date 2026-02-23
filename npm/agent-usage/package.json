@@ -1,0 +1,30 @@
+{
+  "name": "@devboy-tools/agent-usage",
+  "version": "0.0.0",
+  "description": "CLI tool for analyzing AI agent usage (Claude Code) — npm wrapper for Rust binary",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meteora-pro/devboy-agent-usage.git"
+  },
+  "bin": {
+    "devboy-agent-usage": "bin/agent-usage.js"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "bin/agent-usage.js",
+    "index.js",
+    "index.d.ts"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@devboy-tools/agent-usage-darwin-arm64": "0.0.0",
+    "@devboy-tools/agent-usage-darwin-x64": "0.0.0",
+    "@devboy-tools/agent-usage-linux-arm64": "0.0.0",
+    "@devboy-tools/agent-usage-linux-x64": "0.0.0",
+    "@devboy-tools/agent-usage-win32-x64": "0.0.0"
+  }
+}

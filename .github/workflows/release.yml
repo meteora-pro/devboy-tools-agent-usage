@@ -1,0 +1,208 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: devboy-agent-usage
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: devboy-agent-usage
+            asset_name: devboy-agent-usage-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: devboy-agent-usage
+            asset_name: devboy-agent-usage-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: devboy-agent-usage
+            asset_name: devboy-agent-usage-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: devboy-agent-usage
+            asset_name: devboy-agent-usage-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: devboy-agent-usage.exe
+            asset_name: devboy-agent-usage-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+          shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path ${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}.zip
+          (Get-FileHash ${{ matrix.asset_name }}.zip -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.asset_name }}.zip" | Out-File -Encoding utf8 ${{ matrix.asset_name }}.zip.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.asset_name }}.tar.gz
+            target/${{ matrix.target }}/release/${{ matrix.asset_name }}.tar.gz.sha256
+            target/${{ matrix.target }}/release/${{ matrix.asset_name }}.zip
+            target/${{ matrix.target }}/release/${{ matrix.asset_name }}.zip.sha256
+          if-no-files-found: ignore
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec mv {} release/ \;
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          echo "## ${GITHUB_REF_NAME} (${DATE})" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### What's Changed" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" >> CHANGELOG.md
+          else
+            git log --pretty=format:"- %s" >> CHANGELOG.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}
+
+  npm-publish:
+    name: Publish to npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare platform packages
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+
+          # Map: artifact name -> npm package dir
+          declare -A ARTIFACT_TO_PKG=(
+            ["devboy-agent-usage-linux-x86_64"]="agent-usage-linux-x64"
+            ["devboy-agent-usage-linux-arm64"]="agent-usage-linux-arm64"
+            ["devboy-agent-usage-macos-x86_64"]="agent-usage-darwin-x64"
+            ["devboy-agent-usage-macos-arm64"]="agent-usage-darwin-arm64"
+          )
+
+          # Unix platforms
+          for artifact in "${!ARTIFACT_TO_PKG[@]}"; do
+            pkg_dir="npm/${ARTIFACT_TO_PKG[$artifact]}"
+            mkdir -p "$pkg_dir/bin"
+
+            tar -xzf "artifacts/$artifact/$artifact.tar.gz" -C "$pkg_dir/bin/"
+            chmod 755 "$pkg_dir/bin/devboy-agent-usage"
+
+            # Set version in package.json
+            jq --arg v "$VERSION" '.version = $v' "$pkg_dir/package.json" > "$pkg_dir/package.json.tmp"
+            mv "$pkg_dir/package.json.tmp" "$pkg_dir/package.json"
+          done
+
+          # Windows
+          WIN_PKG="npm/agent-usage-win32-x64"
+          mkdir -p "$WIN_PKG/bin"
+          unzip -o "artifacts/devboy-agent-usage-windows-x86_64.exe/devboy-agent-usage-windows-x86_64.exe.zip" -d "$WIN_PKG/bin/"
+          jq --arg v "$VERSION" '.version = $v' "$WIN_PKG/package.json" > "$WIN_PKG/package.json.tmp"
+          mv "$WIN_PKG/package.json.tmp" "$WIN_PKG/package.json"
+
+      - name: Prepare main package
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          PKG="npm/agent-usage/package.json"
+
+          # Set version and update optionalDependencies versions
+          jq --arg v "$VERSION" '
+            .version = $v |
+            .optionalDependencies |= with_entries(.value = $v)
+          ' "$PKG" > "$PKG.tmp"
+          mv "$PKG.tmp" "$PKG"
+
+      - name: Publish platform packages
+        run: |
+          for pkg_dir in npm/agent-usage-*/; do
+            echo "Publishing $(jq -r .name "$pkg_dir/package.json")..."
+            cd "$pkg_dir"
+            npm publish --access public
+            cd "$GITHUB_WORKSPACE"
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package
+        run: |
+          cd npm/agent-usage
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

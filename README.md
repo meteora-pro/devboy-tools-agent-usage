@@ -17,6 +17,16 @@ Reads JSONL logs from `~/.claude/projects/`, optionally correlates with [Activit
 
 ## Installation
 
+### npm (recommended)
+
+```bash
+npm install -g @devboy-tools/agent-usage
+# or
+pnpm add -g @devboy-tools/agent-usage
+```
+
+### From source
+
 ```bash
 git clone https://github.com/meteora-pro/devboy-agent-usage.git
 cd devboy-agent-usage
@@ -27,7 +37,6 @@ Binary: `target/release/devboy-agent-usage`
 
 ### Requirements
 
-- Rust 1.70+ (edition 2021)
 - Claude Code (logs in `~/.claude/projects/`)
 - (Optional) ActivityWatch — for focus analysis
 - (Optional) LLM API — for task classification and summarization
@@ -215,13 +224,15 @@ Cache auto-invalidates when data changes (new turns, different hash). Manual res
 
 ## Models and Pricing
 
-Supported Claude models and pricing (per 1M tokens):
+Cost estimation uses a simplified flat-rate model based on 4 token types (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) and hardcoded per-model pricing:
 
 | Model | Input | Output | Cache Write | Cache Read |
 |-------|-------|--------|-------------|------------|
 | Opus | $15.00 | $75.00 | $18.75 | $1.50 |
 | Sonnet | $3.00 | $15.00 | $3.75 | $0.30 |
 | Haiku | $0.80 | $4.00 | $1.00 | $0.08 |
+
+> **Note:** This is a simplified calculation. It does not account for tiered pricing (higher rates above 200K context tokens), does not use the `costUSD` field from Claude Code logs, and does not deduplicate entries. Actual costs may differ slightly. More accurate cost analysis may be implemented in the future — see [ccusage](https://github.com/ryoppippi/ccusage) for a more precise approach.
 
 Subagent costs are included: session total is distributed proportionally across turns.
 
