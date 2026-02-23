@@ -138,6 +138,13 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Install {
+            global,
+            force,
+            agent,
+        } => {
+            output::commands::install_skills(global, force, agent)?;
+        }
     }
 
     Ok(())

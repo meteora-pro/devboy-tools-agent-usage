@@ -192,6 +192,22 @@ pub enum Commands {
         #[arg(short, long, default_value = "table")]
         format: OutputFormat,
     },
+
+    /// Установить skill для AI-агентов (Claude Code, Cursor, Windsurf, Cline, Copilot)
+    Install {
+        /// Установить глобально (только для Claude Code)
+        #[arg(long, short)]
+        global: bool,
+
+        /// Перезаписать существующие файлы
+        #[arg(long, short)]
+        force: bool,
+
+        /// Целевой агент (по умолчанию: автоопределение)
+        /// Можно указать несколько через запятую: --agent claude,cursor
+        #[arg(long, short, value_delimiter = ',')]
+        agent: Option<Vec<Agent>>,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -215,4 +231,13 @@ pub enum GroupBy {
     Week,
     Month,
     Session,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+pub enum Agent {
+    Claude,
+    Cursor,
+    Windsurf,
+    Cline,
+    Copilot,
 }

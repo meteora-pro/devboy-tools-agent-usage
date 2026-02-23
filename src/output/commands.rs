@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
@@ -7,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::activity::db;
 use crate::claude::parser;
 use crate::claude::session::{self, AggregatedUsage, ClaudeSession};
-use crate::cli::{GroupBy, OutputFormat, TaskSortBy};
+use crate::cli::{Agent, GroupBy, OutputFormat, TaskSortBy};
 use crate::config::Config;
 use crate::correlation::engine;
 use crate::correlation::tasks;
@@ -807,6 +808,167 @@ pub fn retitle(task_id: &str, title: &str) -> Result<()> {
     let cache = crate::classification::ClassificationCache::open()?;
     cache.set_manual_title(task_id, title)?;
     println!("Title for '{}' set to: {}", task_id, title);
+    Ok(())
+}
+
+/// Встроенный SKILL.md
+const SKILL_CONTENT: &str = include_str!("../skills/SKILL.md");
+
+/// Извлечь body из SKILL.md (всё после frontmatter '---...---')
+fn skill_body() -> &'static str {
+    // Ищем второй '---' (конец frontmatter)
+    let content = SKILL_CONTENT.trim_start_matches("---");
+    if let Some(pos) = content.find("---") {
+        content[pos + 3..].trim_start_matches('\n')
+    } else {
+        SKILL_CONTENT
+    }
+}
+
+/// Автоопределение агентов по маркерным директориям в текущей рабочей папке
+fn detect_agents() -> Vec<Agent> {
+    let mut agents = Vec::new();
+
+    if PathBuf::from(".claude").is_dir() {
+        agents.push(Agent::Claude);
+    }
+    if PathBuf::from(".cursor").is_dir() {
+        agents.push(Agent::Cursor);
+    }
+    if PathBuf::from(".windsurf").is_dir() {
+        agents.push(Agent::Windsurf);
+    }
+    if PathBuf::from(".clinerules").exists() {
+        agents.push(Agent::Cline);
+    }
+    if PathBuf::from(".github").is_dir() {
+        agents.push(Agent::Copilot);
+    }
+
+    // Если ничего не нашли — Claude Code по умолчанию
+    if agents.is_empty() {
+        agents.push(Agent::Claude);
+    }
+
+    agents
+}
+
+/// Путь для skill файла агента
+fn agent_skill_path(agent: &Agent, global: bool) -> Result<PathBuf> {
+    match agent {
+        Agent::Claude => {
+            if global {
+                let home = dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+                Ok(home
+                    .join(".claude")
+                    .join("skills")
+                    .join("devboy-agent-usage")
+                    .join("SKILL.md"))
+            } else {
+                Ok(PathBuf::from(".claude")
+                    .join("skills")
+                    .join("devboy-agent-usage")
+                    .join("SKILL.md"))
+            }
+        }
+        Agent::Cursor => Ok(PathBuf::from(".cursor")
+            .join("rules")
+            .join("devboy-agent-usage.mdc")),
+        Agent::Windsurf => Ok(PathBuf::from(".windsurf")
+            .join("rules")
+            .join("devboy-agent-usage.md")),
+        Agent::Cline => Ok(PathBuf::from(".clinerules").join("devboy-agent-usage.md")),
+        Agent::Copilot => Ok(PathBuf::from(".github")
+            .join("instructions")
+            .join("devboy-agent-usage.instructions.md")),
+    }
+}
+
+/// Сгенерировать контент skill файла для агента
+fn agent_skill_content(agent: &Agent) -> String {
+    let body = skill_body();
+    let description = "Analyze AI agent (Claude Code) usage — costs, tasks, time tracking, focus analysis";
+
+    match agent {
+        Agent::Claude => SKILL_CONTENT.to_string(),
+        Agent::Cursor => {
+            format!(
+                "---\ndescription: {}\nalwaysApply: false\n---\n\n{}",
+                description, body
+            )
+        }
+        Agent::Windsurf => body.to_string(),
+        Agent::Cline => {
+            format!("---\ndescription: {}\n---\n\n{}", description, body)
+        }
+        Agent::Copilot => body.to_string(),
+    }
+}
+
+/// Человекочитаемое имя агента
+fn agent_label(agent: &Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude",
+        Agent::Cursor => "cursor",
+        Agent::Windsurf => "windsurf",
+        Agent::Cline => "cline",
+        Agent::Copilot => "copilot",
+    }
+}
+
+/// Команда: установить skill для AI-агентов
+pub fn install_skills(global: bool, force: bool, agents: Option<Vec<Agent>>) -> Result<()> {
+    let target_agents = match agents {
+        Some(a) if !a.is_empty() => a,
+        _ => detect_agents(),
+    };
+
+    // --global имеет смысл только для Claude Code
+    if global {
+        let has_non_claude = target_agents
+            .iter()
+            .any(|a| !matches!(a, Agent::Claude));
+        if has_non_claude {
+            eprintln!("Warning: --global is only supported for Claude Code. Other agents will be installed locally.");
+        }
+    }
+
+    let mut installed = 0;
+    for agent in &target_agents {
+        let is_global = global && matches!(agent, Agent::Claude);
+        let skill_path = agent_skill_path(agent, is_global)?;
+
+        if skill_path.exists() && !force {
+            eprintln!(
+                "Skipped {} (already exists: {}). Use --force to overwrite.",
+                agent_label(agent),
+                skill_path.display()
+            );
+            continue;
+        }
+
+        if let Some(parent) = skill_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let content = agent_skill_content(agent);
+        std::fs::write(&skill_path, content)?;
+
+        println!(
+            "Installed skill for {}: {}",
+            agent_label(agent),
+            skill_path.display()
+        );
+        installed += 1;
+    }
+
+    if installed == 0 {
+        println!("No skills installed. Use --force to overwrite existing files.");
+    } else if installed > 1 {
+        println!("\nInstalled skills for {} agents.", installed);
+    }
+
     Ok(())
 }
 

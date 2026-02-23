@@ -38,6 +38,18 @@ cargo run -- tasks --from 2026-02-20 --with-llm  # запуск
 - `TaskSummary` — результат LLM суммаризации: summary + status + title (`src/classification/client.rs`)
 - `Classifier` — оркестратор: cache → LLM → fallback (`src/classification/mod.rs`)
 
+## Версионирование и релизы
+
+- **Semver**: `MAJOR.MINOR.PATCH` — единственный source of truth: `Cargo.toml` → `version`
+- **Conventional commits** — формат сообщений коммитов:
+  - `feat: ...` — новая функциональность → bump MINOR
+  - `fix: ...` — исправление бага → bump PATCH
+  - `feat!: ...` или `BREAKING CHANGE:` — ломающее изменение → bump MAJOR
+  - `refactor:`, `docs:`, `chore:`, `test:`, `ci:` — без bump версии
+- **Когда бампить**: перед коммитом с `feat:` или `fix:` обновить `version` в `Cargo.toml`
+- **Релиз-процесс**: push в main → CI автоматически создаёт GitHub Release + npm publish (если тег `v{version}` ещё не существует)
+- **npm пакеты**: версии в `npm/*/package.json` обновляются автоматически CI при релизе
+
 ## Кеш
 
 SQLite в `~/.cache/devboy-agent-usage/classifications.db`:
