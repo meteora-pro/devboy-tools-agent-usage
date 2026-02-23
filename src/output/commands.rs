@@ -888,7 +888,8 @@ fn agent_skill_path(agent: &Agent, global: bool) -> Result<PathBuf> {
 /// Сгенерировать контент skill файла для агента
 fn agent_skill_content(agent: &Agent) -> String {
     let body = skill_body();
-    let description = "Analyze AI agent (Claude Code) usage — costs, tasks, time tracking, focus analysis";
+    let description =
+        "Analyze AI agent (Claude Code) usage — costs, tasks, time tracking, focus analysis";
 
     match agent {
         Agent::Claude => SKILL_CONTENT.to_string(),
@@ -926,9 +927,7 @@ pub fn install_skills(global: bool, force: bool, agents: Option<Vec<Agent>>) -> 
 
     // --global имеет смысл только для Claude Code
     if global {
-        let has_non_claude = target_agents
-            .iter()
-            .any(|a| !matches!(a, Agent::Claude));
+        let has_non_claude = target_agents.iter().any(|a| !matches!(a, Agent::Claude));
         if has_non_claude {
             eprintln!("Warning: --global is only supported for Claude Code. Other agents will be installed locally.");
         }
