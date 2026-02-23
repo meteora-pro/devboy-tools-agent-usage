@@ -2,16 +2,45 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
   BINARY_NAME: devboy-agent-usage
 
 jobs:
+  # Check if version changed — skip release if not
+  check-version:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version changed
+        id: check
+        run: |
+          # Check if this version tag already exists
+          if git rev-parse "v${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -80,7 +109,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -100,10 +129,10 @@ jobs:
           find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec mv {} release/ \;
 
       - name: Generate changelog
-        id: changelog
         run: |
+          VERSION="v${{ needs.check-version.outputs.version }}"
           DATE=$(date +%Y-%m-%d)
-          echo "## ${GITHUB_REF_NAME} (${DATE})" > CHANGELOG.md
+          echo "## ${VERSION} (${DATE})" > CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "### What's Changed" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
@@ -114,17 +143,20 @@ jobs:
             git log --pretty=format:"- %s" >> CHANGELOG.md
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: CHANGELOG.md
-          files: release/*
-          draft: false
-          prerelease: ${{ contains(github.ref, '-') }}
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v${{ needs.check-version.outputs.version }}"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+          gh release create "$VERSION" release/* \
+            --title "$VERSION" \
+            --notes-file CHANGELOG.md
 
   npm-publish:
     name: Publish to npm
-    needs: release
+    needs: [check-version, release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -141,13 +173,9 @@ jobs:
         with:
           path: artifacts
 
-      - name: Extract version from tag
-        id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Prepare platform packages
         run: |
-          VERSION="${{ steps.version.outputs.value }}"
+          VERSION="${{ needs.check-version.outputs.version }}"
 
           # Map: artifact name -> npm package dir
           declare -A ARTIFACT_TO_PKG=(
@@ -165,7 +193,6 @@ jobs:
             tar -xzf "artifacts/$artifact/$artifact.tar.gz" -C "$pkg_dir/bin/"
             chmod 755 "$pkg_dir/bin/devboy-agent-usage"
 
-            # Set version in package.json
             jq --arg v "$VERSION" '.version = $v' "$pkg_dir/package.json" > "$pkg_dir/package.json.tmp"
             mv "$pkg_dir/package.json.tmp" "$pkg_dir/package.json"
           done
@@ -179,10 +206,9 @@ jobs:
 
       - name: Prepare main package
         run: |
-          VERSION="${{ steps.version.outputs.value }}"
+          VERSION="${{ needs.check-version.outputs.version }}"
           PKG="npm/agent-usage/package.json"
 
-          # Set version and update optionalDependencies versions
           jq --arg v "$VERSION" '
             .version = $v |
             .optionalDependencies |= with_entries(.value = $v)
