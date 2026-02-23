@@ -2,8 +2,8 @@ pub mod cache;
 mod client;
 pub mod config;
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
@@ -14,7 +14,9 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
 pub use cache::ClassificationCache;
-pub use client::{ClassifyItem, CombineContext, LlmClient, LlmUsageStats, TaskContext, TaskSummary, TurnContext};
+pub use client::{
+    ClassifyItem, CombineContext, LlmClient, LlmUsageStats, TaskContext, TaskSummary, TurnContext,
+};
 use config::LlmConfig;
 
 use crate::correlation::models::TaskGroupSource;
@@ -164,8 +166,7 @@ impl Classifier {
             .map(|chunk| chunk.to_vec())
             .collect();
 
-        let new_results: Mutex<Vec<(String, DateTime<Utc>, String)>> =
-            Mutex::new(Vec::new());
+        let new_results: Mutex<Vec<(String, DateTime<Utc>, String)>> = Mutex::new(Vec::new());
 
         let pool = ThreadPoolBuilder::new()
             .num_threads(self.concurrency)
@@ -210,7 +211,12 @@ impl Classifier {
         // 4. Сохраняем в кеш и добавляем в результат
         let new_items = new_results.into_inner().unwrap();
         if !new_items.is_empty() {
-            if let Err(e) = self.cache.lock().unwrap().store_batch(&new_items, &self.model) {
+            if let Err(e) = self
+                .cache
+                .lock()
+                .unwrap()
+                .store_batch(&new_items, &self.model)
+            {
                 eprintln!("Failed to cache classifications: {}", e);
             }
 
@@ -232,10 +238,7 @@ impl Classifier {
     /// Суммаризировать диалоги по задачам с иерархическим map-reduce
     ///
     /// Возвращает HashMap<task_id, TaskSummary>
-    pub fn summarize_tasks(
-        &self,
-        requests: &[TaskSummaryRequest],
-    ) -> HashMap<String, TaskSummary> {
+    pub fn summarize_tasks(&self, requests: &[TaskSummaryRequest]) -> HashMap<String, TaskSummary> {
         let mut result: HashMap<String, TaskSummary> = HashMap::new();
 
         if requests.is_empty() {
@@ -247,7 +250,12 @@ impl Classifier {
 
         for req in requests {
             let last_ts = req.last_turn_ts.to_rfc3339();
-            if let Some(cached) = self.cache.lock().unwrap().get_summary(&req.task_id, req.turn_count, &last_ts) {
+            if let Some(cached) =
+                self.cache
+                    .lock()
+                    .unwrap()
+                    .get_summary(&req.task_id, req.turn_count, &last_ts)
+            {
                 result.insert(req.task_id.clone(), cached);
             } else {
                 uncached.push(req);
@@ -264,20 +272,22 @@ impl Classifier {
         }
 
         // 2. Считаем общее число нод для progress bar
-        let total_nodes: u64 = uncached.iter().map(|req| count_nodes(req.turns.len()) as u64).sum();
+        let total_nodes: u64 = uncached
+            .iter()
+            .map(|req| count_nodes(req.turns.len()) as u64)
+            .sum();
 
         let pb = ProgressBar::new(total_nodes);
         pb.set_style(
             ProgressStyle::with_template(
-                "{spinner:.green} Summarizing [{bar:40.cyan/blue}] {pos}/{len} nodes ({msg})"
+                "{spinner:.green} Summarizing [{bar:40.cyan/blue}] {pos}/{len} nodes ({msg})",
             )
             .unwrap()
             .progress_chars("█░░"),
         );
 
         // 3. Суммаризируем через hierarchical pipeline
-        let new_results: Mutex<Vec<(String, usize, String, TaskSummary)>> =
-            Mutex::new(Vec::new());
+        let new_results: Mutex<Vec<(String, usize, String, TaskSummary)>> = Mutex::new(Vec::new());
 
         let pool = ThreadPoolBuilder::new()
             .num_threads(self.concurrency)
@@ -315,7 +325,13 @@ impl Classifier {
         // 4. Сохраняем в top-level кеш и добавляем в результат
         let new_items = new_results.into_inner().unwrap();
         for (task_id, turn_count, last_ts, summary) in new_items {
-            if let Err(e) = self.cache.lock().unwrap().store_summary(&task_id, turn_count, &last_ts, &summary, &self.model) {
+            if let Err(e) = self.cache.lock().unwrap().store_summary(
+                &task_id,
+                turn_count,
+                &last_ts,
+                &summary,
+                &self.model,
+            ) {
                 eprintln!("Failed to cache summary for {}: {}", task_id, e);
             }
             result.insert(task_id, summary);
@@ -346,12 +362,16 @@ impl Classifier {
                 project_name,
                 first_seen,
                 last_seen,
-                turns: req.turns.iter().map(|t| TurnContext {
-                    timestamp: t.timestamp.clone(),
-                    user_preview: t.user_preview.clone(),
-                    tool_calls: t.tool_calls.clone(),
-                    agent_time_secs: t.agent_time_secs,
-                }).collect(),
+                turns: req
+                    .turns
+                    .iter()
+                    .map(|t| TurnContext {
+                        timestamp: t.timestamp.clone(),
+                        user_preview: t.user_preview.clone(),
+                        tool_calls: t.tool_calls.clone(),
+                        agent_time_secs: t.agent_time_secs,
+                    })
+                    .collect(),
             };
             let result = client.summarize_task(&context);
             pb.inc(1);
@@ -364,12 +384,22 @@ impl Classifier {
         let mut summaries: Vec<String> = Vec::with_capacity(total_chunks);
 
         for (i, chunk) in chunks.iter().enumerate() {
-            pb.set_message(format!("task {}, layer 0, chunk {}/{}", req.task_id, i + 1, total_chunks));
+            pb.set_message(format!(
+                "task {}, layer 0, chunk {}/{}",
+                req.task_id,
+                i + 1,
+                total_chunks
+            ));
 
             let chunk_hash = compute_chunk_hash_turns(chunk);
 
             // Проверяем chunk cache
-            if let Some(cached) = self.cache.lock().unwrap().get_chunk_summary(&req.task_id, 0, i, &chunk_hash) {
+            if let Some(cached) =
+                self.cache
+                    .lock()
+                    .unwrap()
+                    .get_chunk_summary(&req.task_id, 0, i, &chunk_hash)
+            {
                 summaries.push(cached.summary);
                 pb.inc(1);
                 continue;
@@ -381,19 +411,27 @@ impl Classifier {
                 project_name: project_name.clone(),
                 first_seen: first_seen.clone(),
                 last_seen: last_seen.clone(),
-                turns: chunk.iter().map(|t| TurnContext {
-                    timestamp: t.timestamp.clone(),
-                    user_preview: t.user_preview.clone(),
-                    tool_calls: t.tool_calls.clone(),
-                    agent_time_secs: t.agent_time_secs,
-                }).collect(),
+                turns: chunk
+                    .iter()
+                    .map(|t| TurnContext {
+                        timestamp: t.timestamp.clone(),
+                        user_preview: t.user_preview.clone(),
+                        tool_calls: t.tool_calls.clone(),
+                        agent_time_secs: t.agent_time_secs,
+                    })
+                    .collect(),
             };
 
             let chunk_summary = client.summarize_task_chunk(&context, i, total_chunks)?;
 
             // Сохраняем в chunk cache
             if let Err(e) = self.cache.lock().unwrap().store_chunk_summary(
-                &req.task_id, 0, i, &chunk_hash, &chunk_summary, &self.model,
+                &req.task_id,
+                0,
+                i,
+                &chunk_hash,
+                &chunk_summary,
+                &self.model,
             ) {
                 eprintln!("Failed to cache chunk summary: {}", e);
             }
@@ -410,12 +448,23 @@ impl Classifier {
             let mut next_summaries: Vec<String> = Vec::with_capacity(total_combine);
 
             for (i, chunk) in combine_chunks.iter().enumerate() {
-                pb.set_message(format!("task {}, layer {}, chunk {}/{}", req.task_id, level, i + 1, total_combine));
+                pb.set_message(format!(
+                    "task {}, layer {}, chunk {}/{}",
+                    req.task_id,
+                    level,
+                    i + 1,
+                    total_combine
+                ));
 
                 let chunk_hash = compute_chunk_hash_summaries(chunk);
 
                 // Проверяем chunk cache
-                if let Some(cached) = self.cache.lock().unwrap().get_chunk_summary(&req.task_id, level, i, &chunk_hash) {
+                if let Some(cached) = self.cache.lock().unwrap().get_chunk_summary(
+                    &req.task_id,
+                    level,
+                    i,
+                    &chunk_hash,
+                ) {
                     next_summaries.push(cached.summary);
                     pb.inc(1);
                     continue;
@@ -434,7 +483,12 @@ impl Classifier {
 
                 // Сохраняем в chunk cache
                 if let Err(e) = self.cache.lock().unwrap().store_chunk_summary(
-                    &req.task_id, level, i, &chunk_hash, &combined, &self.model,
+                    &req.task_id,
+                    level,
+                    i,
+                    &chunk_hash,
+                    &combined,
+                    &self.model,
                 ) {
                     eprintln!("Failed to cache combine summary: {}", e);
                 }
@@ -468,11 +522,11 @@ fn count_nodes(turn_count: usize) -> usize {
     }
 
     let mut total = 0;
-    let mut count = (turn_count + CHUNK_SIZE - 1) / CHUNK_SIZE; // layer 0 chunks
+    let mut count = turn_count.div_ceil(CHUNK_SIZE); // layer 0 chunks
     total += count;
 
     while count > 1 {
-        count = (count + COMBINE_SIZE - 1) / COMBINE_SIZE;
+        count = count.div_ceil(COMBINE_SIZE);
         total += count;
     }
 
@@ -530,14 +584,12 @@ mod tests {
 
     #[test]
     fn test_compute_chunk_hash_turns_deterministic() {
-        let turns = vec![
-            TurnContext {
-                timestamp: "10:00".to_string(),
-                user_preview: Some("hello".to_string()),
-                tool_calls: vec!["Read".to_string()],
-                agent_time_secs: 5.0,
-            },
-        ];
+        let turns = vec![TurnContext {
+            timestamp: "10:00".to_string(),
+            user_preview: Some("hello".to_string()),
+            tool_calls: vec!["Read".to_string()],
+            agent_time_secs: 5.0,
+        }];
         let h1 = compute_chunk_hash_turns(&turns);
         let h2 = compute_chunk_hash_turns(&turns);
         assert_eq!(h1, h2);
@@ -557,12 +609,18 @@ mod tests {
             tool_calls: vec![],
             agent_time_secs: 5.0,
         }];
-        assert_ne!(compute_chunk_hash_turns(&turns1), compute_chunk_hash_turns(&turns2));
+        assert_ne!(
+            compute_chunk_hash_turns(&turns1),
+            compute_chunk_hash_turns(&turns2)
+        );
     }
 
     #[test]
     fn test_compute_chunk_hash_summaries_deterministic() {
         let s = vec!["one".to_string(), "two".to_string()];
-        assert_eq!(compute_chunk_hash_summaries(&s), compute_chunk_hash_summaries(&s));
+        assert_eq!(
+            compute_chunk_hash_summaries(&s),
+            compute_chunk_hash_summaries(&s)
+        );
     }
 }

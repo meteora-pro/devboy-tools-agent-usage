@@ -200,13 +200,12 @@ mod tests {
     #[test]
     fn test_clean_browser_title() {
         assert_eq!(
-            clean_browser_title("Merge requests · Meteora / dev-boy · GitLab - Google Chrome - Andrey (Main)"),
+            clean_browser_title(
+                "Merge requests · Meteora / dev-boy · GitLab - Google Chrome - Andrey (Main)"
+            ),
             "Merge requests · Meteora / dev-boy · GitLab"
         );
-        assert_eq!(
-            clean_browser_title("DevBoy - Google Chrome"),
-            "DevBoy"
-        );
+        assert_eq!(clean_browser_title("DevBoy - Google Chrome"), "DevBoy");
         assert_eq!(
             clean_browser_title("Claude - Google Chrome - Andrey (Main)"),
             "Claude"
@@ -216,7 +215,9 @@ mod tests {
     #[test]
     fn test_classify_browser_title_gitlab() {
         assert_eq!(
-            classify_browser_title("Merge requests · Meteora / dev-boy · GitLab - Google Chrome - Andrey (Main)"),
+            classify_browser_title(
+                "Merge requests · Meteora / dev-boy · GitLab - Google Chrome - Andrey (Main)"
+            ),
             BrowserCategory::GitLab
         );
     }
@@ -224,7 +225,9 @@ mod tests {
     #[test]
     fn test_classify_browser_title_clickup() {
         assert_eq!(
-            classify_browser_title("OAuth per User — персональные токены | DEV-559 - ClickUp - Google Chrome"),
+            classify_browser_title(
+                "OAuth per User — персональные токены | DEV-559 - ClickUp - Google Chrome"
+            ),
             BrowserCategory::ClickUp
         );
     }

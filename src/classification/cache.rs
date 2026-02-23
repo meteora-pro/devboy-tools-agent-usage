@@ -95,8 +95,7 @@ impl ClassificationCache {
 
     /// Путь к файлу кеша
     fn db_path() -> Result<PathBuf> {
-        let cache_dir = dirs::cache_dir()
-            .context("Не удалось определить cache директорию")?;
+        let cache_dir = dirs::cache_dir().context("Не удалось определить cache директорию")?;
         Ok(cache_dir
             .join("devboy-agent-usage")
             .join("classifications.db"))
@@ -118,10 +117,7 @@ impl ClassificationCache {
     }
 
     /// Получить классификации для батча ключей
-    pub fn get_batch(
-        &self,
-        keys: &[(String, DateTime<Utc>)],
-    ) -> HashMap<(String, String), String> {
+    pub fn get_batch(&self, keys: &[(String, DateTime<Utc>)]) -> HashMap<(String, String), String> {
         let mut result = HashMap::new();
         for (session_id, turn_ts) in keys {
             let ts_str = turn_ts.to_rfc3339();
@@ -264,10 +260,7 @@ impl ClassificationCache {
     /// Получить все chunk summaries для задачи (level=0), отсортированные по chunk_index
     ///
     /// Возвращает Vec<(chunk_index, summary, status)>
-    pub fn get_all_chunk_summaries(
-        &self,
-        task_id: &str,
-    ) -> Vec<(usize, String, Option<String>)> {
+    pub fn get_all_chunk_summaries(&self, task_id: &str) -> Vec<(usize, String, Option<String>)> {
         let mut stmt = match self.db.prepare(
             "SELECT chunk_index, summary, status FROM chunk_summaries
              WHERE task_id = ?1 AND level = 0

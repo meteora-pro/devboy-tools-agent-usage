@@ -72,8 +72,7 @@ pub struct Turn {
 impl Turn {
     /// Время ожидания ответа (от user до assistant)
     pub fn wait_duration(&self) -> Option<Duration> {
-        self.assistant_timestamp
-            .map(|at| at - self.user_timestamp)
+        self.assistant_timestamp.map(|at| at - self.user_timestamp)
     }
 }
 
@@ -113,9 +112,7 @@ impl AggregatedUsage {
 }
 
 /// Построить сессии из распарсенных событий
-pub fn build_sessions(
-    parsed_files: Vec<(JsonlFileInfo, Vec<ClaudeEvent>)>,
-) -> Vec<ClaudeSession> {
+pub fn build_sessions(parsed_files: Vec<(JsonlFileInfo, Vec<ClaudeEvent>)>) -> Vec<ClaudeSession> {
     // Группируем события по sessionId
     let mut session_map: HashMap<Uuid, SessionBuilder> = HashMap::new();
 
@@ -219,7 +216,9 @@ impl SessionBuilder {
                     // Сохраняем branch для каждого user event
                     user_branches.insert(e.base.uuid, e.base.git_branch.clone());
                     // Извлекаем и сохраняем превью сообщения
-                    let preview = e.message.as_ref()
+                    let preview = e
+                        .message
+                        .as_ref()
                         .and_then(|msg| extract_message_preview(&msg.content, 120));
                     user_previews.insert(e.base.uuid, preview);
                 }
@@ -231,11 +230,12 @@ impl SessionBuilder {
                     }
                     // Парсим compact_boundary events
                     if e.subtype.as_deref() == Some("compact_boundary") {
-                        let trigger = e.compact_metadata.as_ref()
+                        let trigger = e
+                            .compact_metadata
+                            .as_ref()
                             .and_then(|m| m.trigger.clone())
                             .unwrap_or_else(|| "unknown".to_string());
-                        let pre_tokens = e.compact_metadata.as_ref()
-                            .and_then(|m| m.pre_tokens);
+                        let pre_tokens = e.compact_metadata.as_ref().and_then(|m| m.pre_tokens);
                         compactions.push(CompactionEvent {
                             timestamp: e.base.timestamp,
                             trigger,
@@ -314,9 +314,9 @@ impl SessionBuilder {
                             .and_then(|uuid| user_previews.get(&uuid).cloned().flatten());
 
                         // context_tokens = input_tokens + cache_read_input_tokens
-                        let context_tokens = usage.as_ref().map(|u| {
-                            u.input_tokens + u.cache_read_input_tokens
-                        });
+                        let context_tokens = usage
+                            .as_ref()
+                            .map(|u| u.input_tokens + u.cache_read_input_tokens);
 
                         turns.push(Turn {
                             user_timestamp: user_ts,
@@ -344,7 +344,8 @@ impl SessionBuilder {
                                 Some(existing) => {
                                     existing.input_tokens += u.input_tokens;
                                     existing.output_tokens += u.output_tokens;
-                                    existing.cache_creation_input_tokens += u.cache_creation_input_tokens;
+                                    existing.cache_creation_input_tokens +=
+                                        u.cache_creation_input_tokens;
                                     existing.cache_read_input_tokens += u.cache_read_input_tokens;
                                 }
                                 None => {
@@ -445,11 +446,7 @@ fn clean_message_text(text: &str) -> String {
         while let Some(start) = result.find(&open) {
             let close_tag = format!("</{}>", tag);
             if let Some(end) = result.find(&close_tag) {
-                result = format!(
-                    "{}{}",
-                    &result[..start],
-                    &result[end + close_tag.len()..]
-                );
+                result = format!("{}{}", &result[..start], &result[end + close_tag.len()..]);
             } else {
                 // Незакрытый тег — удаляем до конца
                 result = result[..start].to_string();
@@ -509,30 +506,22 @@ fn extract_tool_call_details(event: &AssistantEvent) -> Vec<(String, String)> {
 fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
     match name {
         // Файловые операции — показываем путь
-        "Read" | "Write" => {
-            get_short_path(input, "file_path")
-        }
-        "Edit" => {
-            get_short_path(input, "file_path")
-        }
-        "NotebookEdit" => {
-            get_short_path(input, "notebook_path")
-        }
+        "Read" | "Write" => get_short_path(input, "file_path"),
+        "Edit" => get_short_path(input, "file_path"),
+        "NotebookEdit" => get_short_path(input, "notebook_path"),
 
         // Поиск — показываем паттерн
-        "Glob" => {
-            input.get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        }
+        "Glob" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         "Grep" => {
-            let pattern = input.get("pattern")
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            let path = input
+                .get("path")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let path = input.get("path")
-                .and_then(|v| v.as_str())
-                .map(|p| shorten_path(p))
+                .map(shorten_path)
                 .unwrap_or_default();
             if path.is_empty() {
                 pattern.to_string()
@@ -543,9 +532,7 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
 
         // Bash — показываем команду (обрезанную)
         "Bash" => {
-            let cmd = input.get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             // Берём первую строку, обрезаем до 80 символов
             let first_line = cmd.lines().next().unwrap_or(cmd);
             let truncated: String = first_line.chars().take(80).collect();
@@ -557,59 +544,48 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
         }
 
         // Task tools
-        "TaskCreate" => {
-            input.get("subject")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_str(s, 60))
-                .unwrap_or_default()
-        }
+        "TaskCreate" => input
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_str(s, 60))
+            .unwrap_or_default(),
         "TaskUpdate" => {
-            let id = input.get("taskId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let status = input.get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let id = input.get("taskId").and_then(|v| v.as_str()).unwrap_or("");
+            let status = input.get("status").and_then(|v| v.as_str()).unwrap_or("");
             if status.is_empty() {
                 format!("#{}", id)
             } else {
                 format!("#{} → {}", id, status)
             }
         }
-        "TaskOutput" | "TaskGet" => {
-            input.get("task_id")
-                .or_else(|| input.get("taskId"))
-                .and_then(|v| v.as_str())
-                .map(|s| format!("#{}", s))
-                .unwrap_or_default()
-        }
+        "TaskOutput" | "TaskGet" => input
+            .get("task_id")
+            .or_else(|| input.get("taskId"))
+            .and_then(|v| v.as_str())
+            .map(|s| format!("#{}", s))
+            .unwrap_or_default(),
 
         // Web
-        "WebFetch" => {
-            input.get("url")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_str(s, 60))
-                .unwrap_or_default()
-        }
-        "WebSearch" => {
-            input.get("query")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_str(s, 60))
-                .unwrap_or_default()
-        }
+        "WebFetch" => input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_str(s, 60))
+            .unwrap_or_default(),
+        "WebSearch" => input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_str(s, 60))
+            .unwrap_or_default(),
 
         // Task (subagent)
-        "Task" => {
-            input.get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_str(s, 60))
-                .unwrap_or_default()
-        }
+        "Task" => input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_str(s, 60))
+            .unwrap_or_default(),
 
         // MCP tools — пытаемся извлечь ключевые параметры
-        _ if name.starts_with("mcp__") => {
-            extract_mcp_detail(input)
-        }
+        _ if name.starts_with("mcp__") => extract_mcp_detail(input),
 
         _ => String::new(),
     }
@@ -617,9 +593,10 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
 
 /// Извлечь краткий path из input JSON, сократив до basename или последних компонентов
 fn get_short_path(input: &serde_json::Value, key: &str) -> String {
-    input.get(key)
+    input
+        .get(key)
         .and_then(|v| v.as_str())
-        .map(|p| shorten_path(p))
+        .map(shorten_path)
         .unwrap_or_default()
 }
 
@@ -630,7 +607,7 @@ fn shorten_path(path: &str) -> String {
         return path.to_string();
     }
     // Оставляем последние 3 компонента
-    format!(".../{}", components[components.len()-3..].join("/"))
+    format!(".../{}", components[components.len() - 3..].join("/"))
 }
 
 /// Обрезать строку до max_len символов

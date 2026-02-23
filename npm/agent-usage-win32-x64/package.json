@@ -1,6 +1,6 @@
 {
   "name": "@devboy-tools/agent-usage-win32-x64",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "devboy-agent-usage binary for Windows x64",
   "license": "Apache-2.0",
   "repository": {

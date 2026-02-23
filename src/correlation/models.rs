@@ -88,11 +88,11 @@ pub struct BrowsePage {
 #[derive(Debug, Default, Clone)]
 pub struct ToolCallStats {
     pub total: usize,
-    pub read: usize,    // Read, Glob, Grep
-    pub write: usize,   // Edit, Write, NotebookEdit
-    pub bash: usize,    // Bash
-    pub mcp: usize,     // все mcp__*
-    pub devboy: usize,  // mcp__*devboy* или *dev-boy* (подмножество MCP)
+    pub read: usize,   // Read, Glob, Grep
+    pub write: usize,  // Edit, Write, NotebookEdit
+    pub bash: usize,   // Bash
+    pub mcp: usize,    // все mcp__*
+    pub devboy: usize, // mcp__*devboy* или *dev-boy* (подмножество MCP)
 }
 
 impl ToolCallStats {

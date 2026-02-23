@@ -44,7 +44,7 @@ pub fn description_from_branch(branch: &str, task_id: &str) -> Option<String> {
     if let Some(pos) = branch.find(task_id) {
         let after = &branch[pos + task_id.len()..];
         // Убираем ведущий разделитель (- или /)
-        let trimmed = after.trim_start_matches(|c| c == '-' || c == '/' || c == '_');
+        let trimmed = after.trim_start_matches(['-', '/', '_']);
         if trimmed.is_empty() {
             return None;
         }
@@ -75,7 +75,11 @@ fn task_key_for_turn(
     let turn_ts_key = turn.user_timestamp.to_rfc3339();
     let session_id_str = session.session_id.to_string();
     if let Some(label) = classifications.get(&(session_id_str, turn_ts_key)) {
-        return (label.clone(), TaskGroupSource::Llm, turn.user_message_preview.clone());
+        return (
+            label.clone(),
+            TaskGroupSource::Llm,
+            turn.user_message_preview.clone(),
+        );
     }
 
     // 3. Fallback: session slug или укороченный session_id
@@ -85,16 +89,15 @@ fn task_key_for_turn(
         .map(|s| format!("~{}", s))
         .unwrap_or_else(|| format!("~{}", &session.session_id.to_string()[..8]));
     // Описание: message preview -> git branch -> None
-    let description = turn.user_message_preview.clone()
+    let description = turn
+        .user_message_preview
+        .clone()
         .or_else(|| turn.git_branch.clone());
     (key, TaskGroupSource::Session, description)
 }
 
 /// Processing time одного turn (assistant_ts - user_ts)
-pub fn compute_turn_agent_time(
-    user_ts: DateTime<Utc>,
-    assistant_ts: Option<DateTime<Utc>>,
-) -> f64 {
+pub fn compute_turn_agent_time(user_ts: DateTime<Utc>, assistant_ts: Option<DateTime<Utc>>) -> f64 {
     match assistant_ts {
         Some(at) => {
             let ms = (at - user_ts).num_milliseconds() as f64 / 1000.0;
@@ -112,7 +115,9 @@ fn compute_session_cost_scales(sessions: &[&ClaudeSession]) -> HashMap<String, f
     let mut scales = HashMap::new();
 
     for session in sessions {
-        let turn_sum: f64 = session.turns.iter()
+        let turn_sum: f64 = session
+            .turns
+            .iter()
             .map(|t| {
                 t.usage
                     .as_ref()
@@ -148,7 +153,12 @@ pub fn build_task_stats(
     let mut classify_requests = Vec::new();
     for session in sessions {
         for turn in &session.turns {
-            if turn.git_branch.as_deref().and_then(extract_task_id).is_none() {
+            if turn
+                .git_branch
+                .as_deref()
+                .and_then(extract_task_id)
+                .is_none()
+            {
                 if let Some(preview) = &turn.user_message_preview {
                     classify_requests.push(crate::classification::ClassifyRequest {
                         session_id: session.session_id.to_string(),
@@ -180,7 +190,10 @@ pub fn build_task_stats(
         // Собираем per-session labels из Phase 2
         let mut session_labels: HashMap<String, Vec<String>> = HashMap::new();
         for ((sid, _ts), label) in &classifications {
-            session_labels.entry(sid.clone()).or_default().push(label.clone());
+            session_labels
+                .entry(sid.clone())
+                .or_default()
+                .push(label.clone());
         }
 
         // Отслеживаем полностью orphan сессии (ни один turn не классифицирован)
@@ -192,7 +205,12 @@ pub fn build_task_stats(
 
             for turn in &session.turns {
                 // Turn с branch task ID — обработан в Phase 3 напрямую
-                if turn.git_branch.as_deref().and_then(extract_task_id).is_some() {
+                if turn
+                    .git_branch
+                    .as_deref()
+                    .and_then(extract_task_id)
+                    .is_some()
+                {
                     continue;
                 }
                 // Turn с preview — был отправлен на классификацию в Phase 1-2
@@ -222,23 +240,27 @@ pub fn build_task_stats(
         if let Some(clf) = classifier {
             if !fully_orphan_sessions.is_empty() {
                 let session_requests: Vec<crate::classification::ClassifyRequest> =
-                    fully_orphan_sessions.iter().map(|(session, _)| {
-                        crate::classification::ClassifyRequest {
+                    fully_orphan_sessions
+                        .iter()
+                        .map(|(session, _)| crate::classification::ClassifyRequest {
                             session_id: session.session_id.to_string(),
                             turn_timestamp: session.start_time,
                             message_preview: build_session_context(session),
                             git_branch: session.git_branch.clone(),
                             project_name: session.project_name.clone(),
                             session_slug: session.slug.clone(),
-                        }
-                    }).collect();
+                        })
+                        .collect();
 
                 let new_clf = clf.classify_turns(&session_requests);
 
                 for (session, orphan_timestamps) in &fully_orphan_sessions {
                     let sid = session.session_id.to_string();
                     let session_ts_key = session.start_time.to_rfc3339();
-                    if let Some(label) = new_clf.get(&(sid.clone(), session_ts_key)).map(|c| &c.label) {
+                    if let Some(label) = new_clf
+                        .get(&(sid.clone(), session_ts_key))
+                        .map(|c| &c.label)
+                    {
                         for ts in orphan_timestamps {
                             classifications.insert((sid.clone(), ts.to_rfc3339()), label.clone());
                         }
@@ -254,7 +276,8 @@ pub fn build_task_stats(
     let mut task_turn_contexts: HashMap<String, Vec<TurnContext>> = HashMap::new();
 
     for session in sessions {
-        let scale = cost_scales.get(&session.session_id.to_string())
+        let scale = cost_scales
+            .get(&session.session_id.to_string())
             .copied()
             .unwrap_or(1.0);
 
@@ -262,28 +285,22 @@ pub fn build_task_stats(
             let (task_id, group_source, description) =
                 task_key_for_turn(turn, session, &classifications);
 
-            let agent_time = compute_turn_agent_time(
-                turn.user_timestamp,
-                turn.assistant_timestamp,
-            );
+            let agent_time = compute_turn_agent_time(turn.user_timestamp, turn.assistant_timestamp);
 
             let raw_cost = turn
                 .usage
                 .as_ref()
-                .map(|u| {
-                    tokens::calculate_cost(u, turn.model.as_deref().unwrap_or("sonnet"))
-                })
+                .map(|u| tokens::calculate_cost(u, turn.model.as_deref().unwrap_or("sonnet")))
                 .unwrap_or(0.0);
 
             // Применяем scale factor для учёта subagent cost
             let cost = raw_cost * scale;
 
-            let ts = turn
-                .assistant_timestamp
-                .unwrap_or(turn.user_timestamp);
+            let ts = turn.assistant_timestamp.unwrap_or(turn.user_timestamp);
 
-            let acc = task_map.entry(task_id.clone()).or_insert_with(|| {
-                TaskAccumulator {
+            let acc = task_map
+                .entry(task_id.clone())
+                .or_insert_with(|| TaskAccumulator {
                     task_id: task_id.clone(),
                     description: description.clone(),
                     group_source: group_source.clone(),
@@ -296,8 +313,7 @@ pub fn build_task_stats(
                     first_seen: ts,
                     last_seen: ts,
                     tool_calls: ToolCallStats::default(),
-                }
-            });
+                });
 
             // Обновляем описание если ещё нет
             if acc.description.is_none() && description.is_some() {
@@ -344,9 +360,7 @@ pub fn build_task_stats(
                     } else {
                         "various".to_string()
                     };
-                    let turns = task_turn_contexts
-                        .remove(&acc.task_id)
-                        .unwrap_or_default();
+                    let turns = task_turn_contexts.remove(&acc.task_id).unwrap_or_default();
 
                     crate::classification::TaskSummaryRequest {
                         task_id: acc.task_id.clone(),
@@ -401,7 +415,8 @@ pub fn build_task_stats(
             // Самый ранний session_id — первый (для display_id)
             let mut full_ids_sorted: Vec<&String> = acc.session_ids.iter().collect();
             full_ids_sorted.sort();
-            let short_ids: Vec<String> = full_ids_sorted.iter()
+            let short_ids: Vec<String> = full_ids_sorted
+                .iter()
                 .map(|id| id[..8.min(id.len())].to_string())
                 .collect();
             let first_session_id = short_ids.first().cloned().unwrap_or_default();
@@ -499,8 +514,7 @@ fn compute_human_times_per_task(
     let mut dirty_result: HashMap<String, f64> = HashMap::new();
 
     for session in sessions {
-        let terminal_stats =
-            collect_terminal_focus_stats(session, window_events, afk_events);
+        let terminal_stats = collect_terminal_focus_stats(session, window_events, afk_events);
 
         let total_human = terminal_stats.human_focused_secs;
         let total_dirty = terminal_stats.dirty_human_secs;
@@ -516,10 +530,7 @@ fn compute_human_times_per_task(
         for turn in &session.turns {
             let (task_id, _, _) = task_key_for_turn(turn, session, classifications);
 
-            let agent_time = compute_turn_agent_time(
-                turn.user_timestamp,
-                turn.assistant_timestamp,
-            );
+            let agent_time = compute_turn_agent_time(turn.user_timestamp, turn.assistant_timestamp);
 
             *task_agent_time.entry(task_id).or_default() += agent_time;
             total_agent_time += agent_time;
@@ -557,7 +568,12 @@ pub fn find_sessions_by_task_id(
         let mut requests = Vec::new();
         for session in sessions {
             for turn in &session.turns {
-                if turn.git_branch.as_deref().and_then(extract_task_id).is_none() {
+                if turn
+                    .git_branch
+                    .as_deref()
+                    .and_then(extract_task_id)
+                    .is_none()
+                {
                     if let Some(preview) = &turn.user_message_preview {
                         requests.push(crate::classification::ClassifyRequest {
                             session_id: session.session_id.to_string(),
@@ -591,9 +607,9 @@ pub fn find_sessions_by_task_id(
             let (task_id, group_source, description) =
                 task_key_for_turn(turn, session, &classifications);
 
-            let entry = task_sessions.entry(task_id.clone()).or_insert_with(|| {
-                (HashSet::new(), None)
-            });
+            let entry = task_sessions
+                .entry(task_id.clone())
+                .or_insert_with(|| (HashSet::new(), None));
             entry.0.insert(session.session_id.to_string());
             if entry.1.is_none() {
                 entry.1 = description;
@@ -709,7 +725,8 @@ fn find_dominant_label(labels: &[String]) -> String {
     for label in labels {
         *counts.entry(label.as_str()).or_default() += 1;
     }
-    counts.into_iter()
+    counts
+        .into_iter()
         .max_by_key(|(_, count)| *count)
         .map(|(label, _)| label.to_string())
         .unwrap_or_default()
@@ -738,7 +755,9 @@ fn build_session_context(session: &ClaudeSession) -> String {
     }
 
     // Git branches из individual turns (могут отличаться от session-level)
-    let turn_branches: HashSet<&str> = session.turns.iter()
+    let turn_branches: HashSet<&str> = session
+        .turns
+        .iter()
         .filter_map(|t| t.git_branch.as_deref())
         .collect();
     if !turn_branches.is_empty() {
@@ -747,7 +766,9 @@ fn build_session_context(session: &ClaudeSession) -> String {
     }
 
     // Все доступные message previews из других turns
-    let previews: Vec<&str> = session.turns.iter()
+    let previews: Vec<&str> = session
+        .turns
+        .iter()
         .filter_map(|t| t.user_message_preview.as_deref())
         .collect();
     if !previews.is_empty() {
@@ -762,7 +783,8 @@ fn build_session_context(session: &ClaudeSession) -> String {
         }
     }
     if !tool_counts.is_empty() {
-        let mut summary: Vec<String> = tool_counts.iter()
+        let mut summary: Vec<String> = tool_counts
+            .iter()
             .map(|(name, count)| format!("{}x{}", name, count))
             .collect();
         summary.sort();
@@ -786,10 +808,7 @@ mod tests {
             extract_task_id("fix/PROJ-123-some-fix"),
             Some("PROJ-123".to_string())
         );
-        assert_eq!(
-            extract_task_id("DEV-42"),
-            Some("DEV-42".to_string())
-        );
+        assert_eq!(extract_task_id("DEV-42"), Some("DEV-42".to_string()));
     }
 
     #[test]
@@ -798,14 +817,8 @@ mod tests {
             extract_task_id("feature/377-add-button"),
             Some("377".to_string())
         );
-        assert_eq!(
-            extract_task_id("fix/42-hotfix"),
-            Some("42".to_string())
-        );
-        assert_eq!(
-            extract_task_id("feat/100"),
-            Some("100".to_string())
-        );
+        assert_eq!(extract_task_id("fix/42-hotfix"), Some("42".to_string()));
+        assert_eq!(extract_task_id("feat/100"), Some("100".to_string()));
     }
 
     #[test]
@@ -825,10 +838,7 @@ mod tests {
             description_from_branch("fix/377-add-login-button", "377"),
             Some("add login button".to_string())
         );
-        assert_eq!(
-            description_from_branch("feat/DEV-42", "DEV-42"),
-            None
-        );
+        assert_eq!(description_from_branch("feat/DEV-42", "DEV-42"), None);
     }
 
     #[test]
@@ -843,9 +853,9 @@ mod tests {
 
     #[test]
     fn test_compute_session_cost_scales() {
-        use uuid::Uuid;
-        use crate::claude::session::{AggregatedUsage, Turn};
         use crate::claude::models::TokenUsage;
+        use crate::claude::session::{AggregatedUsage, Turn};
+        use uuid::Uuid;
 
         // Сессия с total_usage = $10, но turn costs = $5 (subagent = $5)
         let session = ClaudeSession {

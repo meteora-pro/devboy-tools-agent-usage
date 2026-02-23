@@ -5,9 +5,9 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::activity::db;
-use crate::cli::{GroupBy, OutputFormat, TaskSortBy};
 use crate::claude::parser;
 use crate::claude::session::{self, AggregatedUsage, ClaudeSession};
+use crate::cli::{GroupBy, OutputFormat, TaskSortBy};
 use crate::config::Config;
 use crate::correlation::engine;
 use crate::correlation::tasks;
@@ -19,9 +19,11 @@ fn load_sessions(config: &Config) -> Result<Vec<ClaudeSession>> {
 
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} files ({eta})")
-            .unwrap()
-            .progress_chars("=>-"),
+        ProgressStyle::with_template(
+            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} files ({eta})",
+        )
+        .unwrap()
+        .progress_chars("=>-"),
     );
 
     let mut parsed = Vec::new();
@@ -50,15 +52,15 @@ fn filter_sessions<'a>(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Vec<&'a ClaudeSession> {
-    let from_dt = from.and_then(|s| parse_date(s));
-    let to_dt = to.and_then(|s| parse_date_end(s));
+    let from_dt = from.and_then(parse_date);
+    let to_dt = to.and_then(parse_date_end);
 
     sessions
         .iter()
         .filter(|s| !s.is_subagent)
         .filter(|s| {
-            if let Some(ref p) = project {
-                s.project_name.contains(p.as_ref() as &str)
+            if let Some(p) = project {
+                s.project_name.contains(p)
             } else {
                 true
             }
@@ -115,7 +117,11 @@ pub fn projects(config: &Config, format: &OutputFormat) -> Result<()> {
         .into_iter()
         .map(|(name, (count, usage))| (name, count, usage))
         .collect();
-    projects.sort_by(|a, b| b.2.estimated_cost_usd.partial_cmp(&a.2.estimated_cost_usd).unwrap());
+    projects.sort_by(|a, b| {
+        b.2.estimated_cost_usd
+            .partial_cmp(&a.2.estimated_cost_usd)
+            .unwrap()
+    });
 
     println!("Found {} projects\n", projects.len());
 
@@ -176,12 +182,18 @@ pub fn summary(
     }
 
     match format {
-        OutputFormat::Table => {
-            table::summary_table(total_sessions, total_turns, &total_usage, total_duration_secs)
-        }
-        OutputFormat::Json => {
-            json::summary_json(total_sessions, total_turns, &total_usage, total_duration_secs)
-        }
+        OutputFormat::Table => table::summary_table(
+            total_sessions,
+            total_turns,
+            &total_usage,
+            total_duration_secs,
+        ),
+        OutputFormat::Json => json::summary_json(
+            total_sessions,
+            total_turns,
+            &total_usage,
+            total_duration_secs,
+        ),
         OutputFormat::Csv => {
             println!("sessions,turns,duration_secs,requests,input_tokens,output_tokens,cost_usd");
             println!(
@@ -274,17 +286,18 @@ pub fn session(
         None
     };
 
-    table::session_detail_enhanced(
-        session,
-        turn_focus.as_deref(),
-        chunk_summaries.as_deref(),
-    );
+    table::session_detail_enhanced(session, turn_focus.as_deref(), chunk_summaries.as_deref());
 
     // Дополнительная корреляция — timeline если есть AW и нет enhanced mode
     if correlate && config.has_activitywatch() && turn_focus.is_none() {
-        println!("\nActivityWatch database found but no window events for this session's time range.");
+        println!(
+            "\nActivityWatch database found but no window events for this session's time range."
+        );
     } else if correlate && !config.has_activitywatch() {
-        println!("\nActivityWatch database not found at {}", config.activitywatch_db_path.display());
+        println!(
+            "\nActivityWatch database not found at {}",
+            config.activitywatch_db_path.display()
+        );
     }
 
     Ok(())
@@ -318,16 +331,10 @@ pub fn focus(
     let to_dt = filtered.iter().map(|s| s.end_time).max().unwrap();
 
     // Загружаем ActivityWatch данные один раз
-    let window_events = db::load_window_events(
-        &config.activitywatch_db_path,
-        Some(from_dt),
-        Some(to_dt),
-    )?;
-    let afk_events = db::load_afk_events(
-        &config.activitywatch_db_path,
-        Some(from_dt),
-        Some(to_dt),
-    )?;
+    let window_events =
+        db::load_window_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
+    let afk_events =
+        db::load_afk_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
 
     // Коррелируем каждую сессию
     let mut correlated_sessions = Vec::new();
@@ -373,10 +380,8 @@ pub fn focus(
 /// 2. Если не нашёл — ищет по task ID через find_sessions_by_task_id (cache-only)
 pub fn timeline(config: &Config, id: &str) -> Result<()> {
     let all_sessions = load_sessions(config)?;
-    let non_subagent: Vec<&ClaudeSession> = all_sessions
-        .iter()
-        .filter(|s| !s.is_subagent)
-        .collect();
+    let non_subagent: Vec<&ClaudeSession> =
+        all_sessions.iter().filter(|s| !s.is_subagent).collect();
 
     // 1. Ищем по UUID substring (точное совпадение начала)
     let uuid_matches: Vec<&ClaudeSession> = non_subagent
@@ -399,10 +404,7 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
         (title, uuid_matches)
     } else {
         // 2. Ищем по task ID через cached classifier
-        let classifier = match crate::classification::Classifier::new() {
-            Ok(c) => Some(c),
-            Err(_) => None,
-        };
+        let classifier = crate::classification::Classifier::new().ok();
 
         match tasks::find_sessions_by_task_id(id, &non_subagent, classifier.as_ref()) {
             Some((title, session_uuids)) => {
@@ -417,12 +419,7 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
                     anyhow::bail!("Task '{}' найден, но сессии не загружены", id);
                 }
 
-                let header = format!(
-                    "Task: {} | {} | {} sessions",
-                    id,
-                    title,
-                    sessions.len(),
-                );
+                let header = format!("Task: {} | {} | {} sessions", id, title, sessions.len(),);
                 (header, sessions)
             }
             None => {
@@ -443,16 +440,8 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
     let to_dt = sorted_sessions.iter().map(|s| s.end_time).max().unwrap();
 
     let (window_events, afk_events) = if config.has_activitywatch() {
-        let w = db::load_window_events(
-            &config.activitywatch_db_path,
-            Some(from_dt),
-            Some(to_dt),
-        )?;
-        let a = db::load_afk_events(
-            &config.activitywatch_db_path,
-            Some(from_dt),
-            Some(to_dt),
-        )?;
+        let w = db::load_window_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
+        let a = db::load_afk_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
         (w, a)
     } else {
         (Vec::new(), Vec::new())
@@ -469,16 +458,8 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
         // Per-turn focus и terminal stats
         let (turn_focus, terminal_stats) = if !window_events.is_empty() {
             let session_clone = clone_session_for_correlation(session);
-            let focus = engine::collect_per_turn_focus(
-                &session_clone,
-                &window_events,
-                &afk_events,
-            );
-            let stats = engine::collect_terminal_focus_stats(
-                session,
-                &window_events,
-                &afk_events,
-            );
+            let focus = engine::collect_per_turn_focus(&session_clone, &window_events, &afk_events);
+            let stats = engine::collect_terminal_focus_stats(session, &window_events, &afk_events);
             (Some(focus), Some(stats))
         } else {
             (None, None)
@@ -488,7 +469,11 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
         let gap_info = if i > 0 {
             let prev_end = sorted_sessions[i - 1].end_time;
             let gap = timeline::session_chain_gap(prev_end, session.start_time);
-            if gap.is_empty() { None } else { Some(gap) }
+            if gap.is_empty() {
+                None
+            } else {
+                Some(gap)
+            }
         } else {
             None
         };
@@ -509,11 +494,7 @@ pub fn timeline(config: &Config, id: &str) -> Result<()> {
 }
 
 /// Команда: анализ браузерных страниц
-pub fn browse(
-    config: &Config,
-    session_id: &str,
-    format: &OutputFormat,
-) -> Result<()> {
+pub fn browse(config: &Config, session_id: &str, format: &OutputFormat) -> Result<()> {
     if !config.has_activitywatch() {
         anyhow::bail!(
             "ActivityWatch database not found at {}",
@@ -553,19 +534,13 @@ pub fn browse(
     }
 
     // Собираем browse stats
-    let browse_stats = engine::collect_browse_stats(
-        &window_events,
-        session.start_time,
-        session.end_time,
-    );
+    let browse_stats =
+        engine::collect_browse_stats(&window_events, session.start_time, session.end_time);
 
     // Собираем terminal focus stats
     let session_clone = clone_session_for_correlation(session);
-    let terminal_stats = engine::collect_terminal_focus_stats(
-        &session_clone,
-        &window_events,
-        &afk_events,
-    );
+    let terminal_stats =
+        engine::collect_terminal_focus_stats(&session_clone, &window_events, &afk_events);
 
     match format {
         OutputFormat::Table => table::browse_table(session, &browse_stats, &terminal_stats),
@@ -589,6 +564,7 @@ pub fn browse(
 }
 
 /// Команда: группировка сессий по задачам
+#[allow(clippy::too_many_arguments)]
 pub fn tasks(
     config: &Config,
     project: Option<&str>,
@@ -612,16 +588,8 @@ pub fn tasks(
         let from_dt = filtered.iter().map(|s| s.start_time).min().unwrap();
         let to_dt = filtered.iter().map(|s| s.end_time).max().unwrap();
 
-        let w = db::load_window_events(
-            &config.activitywatch_db_path,
-            Some(from_dt),
-            Some(to_dt),
-        )?;
-        let a = db::load_afk_events(
-            &config.activitywatch_db_path,
-            Some(from_dt),
-            Some(to_dt),
-        )?;
+        let w = db::load_window_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
+        let a = db::load_afk_events(&config.activitywatch_db_path, Some(from_dt), Some(to_dt))?;
         (Some(w), Some(a))
     } else {
         if with_aw && !config.has_activitywatch() {
@@ -747,21 +715,21 @@ pub fn cost(
             ),
         };
 
-        groups
-            .entry(key)
-            .or_insert_with(AggregatedUsage::default)
-            .merge(&session.total_usage);
+        groups.entry(key).or_default().merge(&session.total_usage);
     }
 
     let mut rows: Vec<(String, AggregatedUsage)> = groups.into_iter().collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
 
-    println!("Cost breakdown ({})\n", match group_by {
-        GroupBy::Day => "by day",
-        GroupBy::Week => "by week",
-        GroupBy::Month => "by month",
-        GroupBy::Session => "by session",
-    });
+    println!(
+        "Cost breakdown ({})\n",
+        match group_by {
+            GroupBy::Day => "by day",
+            GroupBy::Week => "by week",
+            GroupBy::Month => "by month",
+            GroupBy::Session => "by session",
+        }
+    );
 
     match format {
         OutputFormat::Table => table::cost_table(&rows),
@@ -889,7 +857,9 @@ fn print_csv_projects(projects: &[(String, usize, AggregatedUsage)]) {
 }
 
 fn print_csv_sessions(sessions: &[&ClaudeSession]) {
-    println!("session_id,project,start_time,duration_secs,turns,input_tokens,output_tokens,cost_usd");
+    println!(
+        "session_id,project,start_time,duration_secs,turns,input_tokens,output_tokens,cost_usd"
+    );
     for s in sessions {
         println!(
             "{},{},{},{},{},{},{},{:.4}",

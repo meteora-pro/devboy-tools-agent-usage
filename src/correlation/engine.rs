@@ -27,7 +27,8 @@ pub fn correlate_session(
         // Период 1: Claude обрабатывает запрос (user → assistant)
         let processing_start = turn.user_timestamp;
         let processing_end = assistant_ts;
-        let processing_secs = (processing_end - processing_start).num_milliseconds() as f64 / 1000.0;
+        let processing_secs =
+            (processing_end - processing_start).num_milliseconds() as f64 / 1000.0;
 
         if processing_secs > 0.0 {
             let activities =
@@ -63,8 +64,7 @@ pub fn correlate_session(
         if let Some(next_turn) = session.turns.get(i + 1) {
             let thinking_start = assistant_ts;
             let thinking_end = next_turn.user_timestamp;
-            let thinking_secs =
-                (thinking_end - thinking_start).num_milliseconds() as f64 / 1000.0;
+            let thinking_secs = (thinking_end - thinking_start).num_milliseconds() as f64 / 1000.0;
 
             if thinking_secs > 0.0 && thinking_secs < 3600.0 {
                 // Игнорируем промежутки > 1 часа (скорее всего разные сессии работы)
@@ -86,7 +86,8 @@ pub fn correlate_session(
     }
 
     // Считаем процент фокуса
-    let total_active = stats.focused_during_processing_secs + stats.distracted_during_processing_secs;
+    let total_active =
+        stats.focused_during_processing_secs + stats.distracted_during_processing_secs;
     if total_active > 0.0 {
         stats.focus_percentage = stats.focused_during_processing_secs / total_active * 100.0;
     }
@@ -111,8 +112,7 @@ fn find_activities_in_range(
     end: DateTime<Utc>,
 ) -> Vec<UserActivity> {
     // Бинарный поиск: находим первый event, который может пересекаться
-    let start_idx = events
-        .partition_point(|e| e.end_time() <= start);
+    let start_idx = events.partition_point(|e| e.end_time() <= start);
 
     let mut activities = Vec::new();
 
@@ -208,8 +208,7 @@ pub fn collect_browse_stats(
     }
     let mut categories: Vec<(crate::activity::models::BrowserCategory, f64)> =
         cat_time.into_values().collect();
-    categories
-        .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    categories.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Считаем процент рабочих страниц
     let total_time: f64 = pages.iter().map(|p| p.total_duration_secs).sum();
@@ -232,11 +231,7 @@ pub fn collect_browse_stats(
 }
 
 /// Проверить, был ли пользователь AFK в заданном диапазоне
-fn is_afk_in_range(
-    events: &[AwAfkEvent],
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> bool {
+fn is_afk_in_range(events: &[AwAfkEvent], start: DateTime<Utc>, end: DateTime<Utc>) -> bool {
     let start_idx = events.partition_point(|e| e.end_time() <= start);
 
     for event in &events[start_idx..] {
@@ -256,11 +251,7 @@ fn is_afk_in_range(
 }
 
 /// Посчитать количество AFK-секунд в заданном диапазоне (гранулярно)
-fn afk_seconds_in_range(
-    events: &[AwAfkEvent],
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> f64 {
+fn afk_seconds_in_range(events: &[AwAfkEvent], start: DateTime<Utc>, end: DateTime<Utc>) -> f64 {
     let start_idx = events.partition_point(|e| e.end_time() <= start);
     let mut afk_secs = 0.0;
 
@@ -357,8 +348,7 @@ pub fn collect_terminal_focus_stats(
         if let Some(next_turn) = session.turns.get(i + 1) {
             let thinking_start = assistant_ts;
             let thinking_end = next_turn.user_timestamp;
-            let thinking_secs =
-                (thinking_end - thinking_start).num_milliseconds() as f64 / 1000.0;
+            let thinking_secs = (thinking_end - thinking_start).num_milliseconds() as f64 / 1000.0;
 
             if thinking_secs > 0.0 && thinking_secs < 3600.0 {
                 stats.total_thinking_secs += thinking_secs;
@@ -481,8 +471,7 @@ pub fn collect_per_turn_focus(
         }
 
         // Находим приложения в диапазоне processing
-        let activities =
-            find_activities_in_range(window_events, processing_start, processing_end);
+        let activities = find_activities_in_range(window_events, processing_start, processing_end);
 
         // Считаем AFK
         let afk_secs = afk_seconds_in_range(afk_events, processing_start, processing_end);
@@ -503,14 +492,20 @@ pub fn collect_per_turn_focus(
             if is_matching_terminal(&activity.app, &activity.title, basename) {
                 was_watching = true;
                 // Пропорционально вычитаем AFK из времени на терминале
-                let afk_ratio = if processing_secs > 0.0 { afk_secs / processing_secs } else { 0.0 };
+                let afk_ratio = if processing_secs > 0.0 {
+                    afk_secs / processing_secs
+                } else {
+                    0.0
+                };
                 watching_terminal_secs += activity.duration_secs * (1.0 - afk_ratio);
             }
         }
 
-        let primary = app_time
-            .into_iter()
-            .max_by(|a, b| a.1 .0.partial_cmp(&b.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+        let primary = app_time.into_iter().max_by(|a, b| {
+            a.1 .0
+                .partial_cmp(&b.1 .0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         result.push(TurnFocusInfo {
             primary_app: primary.as_ref().map(|(app, _)| app.clone()),

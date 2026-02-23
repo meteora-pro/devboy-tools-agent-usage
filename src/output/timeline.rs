@@ -105,9 +105,7 @@ pub fn print_detailed_timeline(
                     // Считаем tool calls для grand total
                     // (tool_summary уже сгруппирован, но нам нужны raw counts)
 
-                    let ctx_str = context_tokens
-                        .map(|t| format_ctx_tokens(t))
-                        .unwrap_or_default();
+                    let ctx_str = context_tokens.map(format_ctx_tokens).unwrap_or_default();
 
                     let focus_str = focus_app.as_deref().unwrap_or("N/A");
 
@@ -199,22 +197,30 @@ pub fn print_detailed_timeline(
         println!("{table}");
 
         // Per-session summary с данными из TerminalFocusStats (если есть AW)
-        let mut summary_parts = vec![
-            format!("Agent {}", format_duration_short(session_agent_secs)),
-        ];
+        let mut summary_parts = vec![format!(
+            "Agent {}",
+            format_duration_short(session_agent_secs)
+        )];
 
         if let Some(ref ts) = sd.terminal_stats {
             grand_has_aw = true;
             // Clean human time: фокус на ЭТОМ терминале, не AFK
-            summary_parts.push(format!("Human {}", format_duration_short(ts.human_focused_secs)));
+            summary_parts.push(format!(
+                "Human {}",
+                format_duration_short(ts.human_focused_secs)
+            ));
             // Dirty human time: не AFK пока агент работал (любое приложение)
-            summary_parts.push(format!("Dirty {}", format_duration_short(ts.dirty_human_secs)));
+            summary_parts.push(format!(
+                "Dirty {}",
+                format_duration_short(ts.dirty_human_secs)
+            ));
             grand_human_clean_secs += ts.human_focused_secs;
             grand_human_dirty_secs += ts.dirty_human_secs;
 
             // Focus %: время на этом терминале / total processing
             if ts.total_processing_secs > 0.0 {
-                let focus_pct = (ts.human_focused_secs / ts.total_processing_secs * 100.0).min(100.0);
+                let focus_pct =
+                    (ts.human_focused_secs / ts.total_processing_secs * 100.0).min(100.0);
                 summary_parts.push(format!("Focus {:.0}%", focus_pct));
             }
         } else {
@@ -224,14 +230,18 @@ pub fn print_detailed_timeline(
         }
 
         if session_compaction_count > 0 {
-            summary_parts.push(format!("{} compaction{}", session_compaction_count,
-                if session_compaction_count > 1 { "s" } else { "" }));
+            summary_parts.push(format!(
+                "{} compaction{}",
+                session_compaction_count,
+                if session_compaction_count > 1 {
+                    "s"
+                } else {
+                    ""
+                }
+            ));
         }
         println!();
-        println!(
-            "Session: {}",
-            summary_parts.join(" | ").dimmed()
-        );
+        println!("Session: {}", summary_parts.join(" | ").dimmed());
         println!();
 
         grand_turns += session.turns.len();
@@ -247,12 +257,16 @@ pub fn print_detailed_timeline(
     // Grand total
     {
         let tool_summary = format_tool_counts_from_map(&grand_tool_counts);
-        let mut total_parts = vec![
-            format!("Agent {}", format_duration_short(grand_agent_secs)),
-        ];
+        let mut total_parts = vec![format!("Agent {}", format_duration_short(grand_agent_secs))];
         if grand_has_aw {
-            total_parts.push(format!("Human {}", format_duration_short(grand_human_clean_secs)));
-            total_parts.push(format!("Dirty {}", format_duration_short(grand_human_dirty_secs)));
+            total_parts.push(format!(
+                "Human {}",
+                format_duration_short(grand_human_clean_secs)
+            ));
+            total_parts.push(format!(
+                "Dirty {}",
+                format_duration_short(grand_human_dirty_secs)
+            ));
         }
         total_parts.push(format!("{} turns", grand_turns));
         if grand_compactions > 0 {
@@ -264,10 +278,7 @@ pub fn print_detailed_timeline(
         if total_cost > 0.0 {
             total_parts.push(format!("${:.2}", total_cost));
         }
-        println!(
-            "{}",
-            format!("Total: {}", total_parts.join(" | ")).bold()
-        );
+        println!("{}", format!("Total: {}", total_parts.join(" | ")).bold());
     }
 }
 
@@ -445,7 +456,10 @@ fn format_tool_calls_with_details(details: &[(String, String)]) -> String {
     let mut entries: Vec<(String, String, usize)> = Vec::new(); // (short_name, detail, count)
     for (name, detail) in details {
         let short_name = shorten_tool_name(name).to_string();
-        if let Some(entry) = entries.iter_mut().find(|(n, d, _)| *n == short_name && *d == *detail) {
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|(n, d, _)| *n == short_name && *d == *detail)
+        {
             entry.2 += 1;
         } else {
             entries.push((short_name, detail.clone(), 1));

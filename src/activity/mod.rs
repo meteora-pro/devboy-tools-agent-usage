@@ -1,3 +1,3 @@
-pub mod models;
-pub mod db;
 pub mod classifier;
+pub mod db;
+pub mod models;

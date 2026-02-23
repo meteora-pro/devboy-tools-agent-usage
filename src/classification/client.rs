@@ -169,7 +169,9 @@ impl LlmClient {
 
     /// Вызов Anthropic Messages API
     fn call_anthropic(&self, prompt: &str, max_tokens: u32) -> Result<String> {
-        let api_key = self.api_key.as_deref()
+        let api_key = self
+            .api_key
+            .as_deref()
             .context("Anthropic API key is required")?;
 
         let body = serde_json::json!({
@@ -178,7 +180,8 @@ impl LlmClient {
             "messages": [{"role": "user", "content": prompt}]
         });
 
-        let response = self.agent
+        let response = self
+            .agent
             .post(&self.api_url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
@@ -212,7 +215,8 @@ impl LlmClient {
             "messages": [{"role": "user", "content": prompt}]
         });
 
-        let mut request = self.agent
+        let mut request = self
+            .agent
             .post(&self.api_url)
             .header("content-type", "application/json");
 
@@ -292,7 +296,8 @@ fn build_summarize_prompt(ctx: &TaskContext) -> String {
             "-".to_string()
         } else {
             // Группируем одинаковые tool calls: Read(3), Edit(2)
-            let mut tool_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            let mut tool_counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
             for tc in &turn.tool_calls {
                 *tool_counts.entry(tc.as_str()).or_default() += 1;
             }
@@ -342,14 +347,19 @@ Turns: {turn_count}
 }
 
 /// Prompt для суммаризации одного чанка (часть X из Y)
-fn build_summarize_chunk_prompt(ctx: &TaskContext, chunk_index: usize, total_chunks: usize) -> String {
+fn build_summarize_chunk_prompt(
+    ctx: &TaskContext,
+    chunk_index: usize,
+    total_chunks: usize,
+) -> String {
     let mut timeline = String::new();
     for (i, turn) in ctx.turns.iter().enumerate() {
         let user_text = turn.user_preview.as_deref().unwrap_or("[нет превью]");
         let tools = if turn.tool_calls.is_empty() {
             "-".to_string()
         } else {
-            let mut tool_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            let mut tool_counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
             for tc in &turn.tool_calls {
                 *tool_counts.entry(tc.as_str()).or_default() += 1;
             }
@@ -444,14 +454,16 @@ fn parse_labels(text: &str, expected_count: usize) -> Result<Vec<String>> {
     let cleaned = strip_markdown_fences(trimmed);
 
     // 2. Находим JSON array (если нет ] — ответ обрезан, добавляем)
-    let json_start = cleaned.find('[').context("No JSON array found in LLM response")?;
+    let json_start = cleaned
+        .find('[')
+        .context("No JSON array found in LLM response")?;
     let json_str = match cleaned.rfind(']') {
         Some(json_end) => cleaned[json_start..=json_end].to_string(),
         None => {
             // Ответ обрезан по max_tokens — пробуем починить
             let partial = cleaned[json_start..].trim_end();
             // Убираем незавершённую строку/запятую в конце и закрываем массив
-            let trimmed_partial = partial.trim_end_matches(|c: char| c == ',' || c == ' ' || c == '\n' || c == '"');
+            let trimmed_partial = partial.trim_end_matches([',', ' ', '\n', '"']);
             // Если последний символ — не кавычка и не null, обрезаем до последнего полного элемента
             let last_comma = trimmed_partial.rfind(',').unwrap_or(trimmed_partial.len());
             let safe_part = &trimmed_partial[..last_comma];
@@ -464,19 +476,19 @@ fn parse_labels(text: &str, expected_count: usize) -> Result<Vec<String>> {
 
     // 4. Парсим как Vec<Value> — универсально обрабатывает null, string, object
     let labels: Vec<String> = match serde_json::from_str::<Vec<serde_json::Value>>(&fixed) {
-        Ok(values) => {
-            values.iter().map(|v| match v {
+        Ok(values) => values
+            .iter()
+            .map(|v| match v {
                 serde_json::Value::String(s) => s.clone(),
                 serde_json::Value::Null => "unclassified".to_string(),
                 serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Object(obj) => {
-                    obj.values()
-                        .find_map(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "unclassified".to_string())
-                }
+                serde_json::Value::Object(obj) => obj
+                    .values()
+                    .find_map(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "unclassified".to_string()),
                 other => other.to_string(),
-            }).collect()
-        }
+            })
+            .collect(),
         Err(_) => {
             // 5. Последний fallback: regex-extraction строк в кавычках
             let fallback = extract_quoted_strings(&json_str);
@@ -491,14 +503,17 @@ fn parse_labels(text: &str, expected_count: usize) -> Result<Vec<String>> {
     };
 
     // 6. Санитизируем: "null", пустые строки → "unclassified"
-    let labels: Vec<String> = labels.into_iter().map(|l| {
-        let t = l.trim().to_string();
-        if t.is_empty() || t.eq_ignore_ascii_case("null") || t == "N/A" {
-            "unclassified".to_string()
-        } else {
-            t
-        }
-    }).collect();
+    let labels: Vec<String> = labels
+        .into_iter()
+        .map(|l| {
+            let t = l.trim().to_string();
+            if t.is_empty() || t.eq_ignore_ascii_case("null") || t == "N/A" {
+                "unclassified".to_string()
+            } else {
+                t
+            }
+        })
+        .collect();
 
     // 7. Дополняем/обрезаем до expected_count
     let mut result = labels;
@@ -536,16 +551,13 @@ fn fix_json_array(json_str: &str) -> String {
 
     // Trailing comma перед закрывающей скобкой: ,] → ]
     // Учитываем пробелы/переносы между , и ]
-    while let Some(pos) = s.rfind(',') {
+    if let Some(pos) = s.rfind(',') {
         let after = s[pos + 1..].trim_start();
         if after.starts_with(']') {
             s = format!("{}{}", &s[..pos], &s[pos + 1..].replacen(',', "", 0));
             // Удаляем запятую
             s.remove(pos);
             s.insert(pos, ' ');
-            break;
-        } else {
-            break;
         }
     }
 
@@ -591,15 +603,20 @@ fn parse_summary(text: &str) -> Result<TaskSummary> {
     let cleaned = strip_markdown_fences(trimmed);
 
     // Ищем JSON object в ответе
-    let json_start = cleaned.find('{').context("No JSON object found in LLM summary response")?;
-    let json_end = cleaned.rfind('}').context("No closing brace in LLM summary response")?;
+    let json_start = cleaned
+        .find('{')
+        .context("No JSON object found in LLM summary response")?;
+    let json_end = cleaned
+        .rfind('}')
+        .context("No closing brace in LLM summary response")?;
     let json_str = &cleaned[json_start..=json_end];
 
-    let parsed: serde_json::Value = serde_json::from_str(json_str)
-        .with_context(|| format!(
+    let parsed: serde_json::Value = serde_json::from_str(json_str).with_context(|| {
+        format!(
             "Failed to parse summary JSON. Raw: {}",
             &json_str[..json_str.len().min(300)]
-        ))?;
+        )
+    })?;
 
     let summary = parsed
         .get("summary")
@@ -618,7 +635,11 @@ fn parse_summary(text: &str) -> Result<TaskSummary> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    Ok(TaskSummary { summary, status, title })
+    Ok(TaskSummary {
+        summary,
+        status,
+        title,
+    })
 }
 
 #[cfg(test)]
@@ -629,7 +650,10 @@ mod tests {
     fn test_parse_labels() {
         let text = r#"["meeting analysis", "code review", "task planning"]"#;
         let labels = parse_labels(text, 3).unwrap();
-        assert_eq!(labels, vec!["meeting analysis", "code review", "task planning"]);
+        assert_eq!(
+            labels,
+            vec!["meeting analysis", "code review", "task planning"]
+        );
     }
 
     #[test]
@@ -650,13 +674,11 @@ Hope this helps!"#;
 
     #[test]
     fn test_build_classify_prompt() {
-        let items = vec![
-            ClassifyItem {
-                message_preview: "implement the login page".to_string(),
-                git_branch: Some("feat/DEV-123".to_string()),
-                project_name: "my-app".to_string(),
-            },
-        ];
+        let items = vec![ClassifyItem {
+            message_preview: "implement the login page".to_string(),
+            git_branch: Some("feat/DEV-123".to_string()),
+            project_name: "my-app".to_string(),
+        }];
         let prompt = build_classify_prompt(&items);
         assert!(prompt.contains("[project: my-app, branch: feat/DEV-123]"));
         assert!(prompt.contains("implement the login page"));
@@ -724,7 +746,15 @@ Done!"#;
     fn test_parse_labels_with_nulls() {
         let text = r#"["проверка деплоя", null, "дебаг подов", null]"#;
         let labels = parse_labels(text, 4).unwrap();
-        assert_eq!(labels, vec!["проверка деплоя", "unclassified", "дебаг подов", "unclassified"]);
+        assert_eq!(
+            labels,
+            vec![
+                "проверка деплоя",
+                "unclassified",
+                "дебаг подов",
+                "unclassified"
+            ]
+        );
     }
 
     #[test]
@@ -759,10 +789,7 @@ Done!"#;
 
     #[test]
     fn test_strip_markdown_fences() {
-        assert_eq!(
-            strip_markdown_fences("```json\n[\"a\"]\n```"),
-            "[\"a\"]\n"
-        );
+        assert_eq!(strip_markdown_fences("```json\n[\"a\"]\n```"), "[\"a\"]\n");
         assert_eq!(
             strip_markdown_fences("```\n{\"a\": 1}\n```"),
             "{\"a\": 1}\n"

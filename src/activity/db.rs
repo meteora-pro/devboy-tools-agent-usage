@@ -10,9 +10,7 @@ pub fn load_buckets(db_path: &Path) -> Result<Vec<AwBucket>> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("Не удалось открыть ActivityWatch БД: {}", db_path.display()))?;
 
-    let mut stmt = conn.prepare(
-        "SELECT key, id, type, hostname FROM bucketmodel"
-    )?;
+    let mut stmt = conn.prepare("SELECT key, id, type, hostname FROM bucketmodel")?;
 
     let buckets = stmt
         .query_map([], |row| {
@@ -40,10 +38,9 @@ pub fn load_window_events(
 
     // Находим bucket-ы с типом currentwindow
     let bucket_keys: Vec<i64> = {
-        let mut stmt = conn.prepare(
-            "SELECT key FROM bucketmodel WHERE type = 'currentwindow'"
-        )?;
-        let keys: Vec<i64> = stmt.query_map([], |row| row.get(0))?
+        let mut stmt = conn.prepare("SELECT key FROM bucketmodel WHERE type = 'currentwindow'")?;
+        let keys: Vec<i64> = stmt
+            .query_map([], |row| row.get(0))?
             .filter_map(|r| r.ok())
             .collect();
         keys
@@ -53,7 +50,11 @@ pub fn load_window_events(
         return Ok(Vec::new());
     }
 
-    let placeholders: String = bucket_keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let placeholders: String = bucket_keys
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
     let query = format!(
         "SELECT timestamp, duration, datastr FROM eventmodel \
          WHERE bucket_id IN ({}) {} \
@@ -70,10 +71,14 @@ pub fn load_window_events(
         .collect();
 
     if let Some(f) = from {
-        params.push(Box::new(f.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string()));
+        params.push(Box::new(
+            f.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string(),
+        ));
     }
     if let Some(t) = to {
-        params.push(Box::new(t.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string()));
+        params.push(Box::new(
+            t.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string(),
+        ));
     }
 
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -95,7 +100,11 @@ pub fn load_window_events(
                 timestamp,
                 duration_secs: duration,
                 app: data.get("app")?.as_str()?.to_string(),
-                title: data.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                title: data
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
         .collect();
@@ -113,10 +122,9 @@ pub fn load_afk_events(
         .with_context(|| format!("Не удалось открыть ActivityWatch БД: {}", db_path.display()))?;
 
     let bucket_keys: Vec<i64> = {
-        let mut stmt = conn.prepare(
-            "SELECT key FROM bucketmodel WHERE type = 'afkstatus'"
-        )?;
-        let keys: Vec<i64> = stmt.query_map([], |row| row.get(0))?
+        let mut stmt = conn.prepare("SELECT key FROM bucketmodel WHERE type = 'afkstatus'")?;
+        let keys: Vec<i64> = stmt
+            .query_map([], |row| row.get(0))?
             .filter_map(|r| r.ok())
             .collect();
         keys
@@ -126,7 +134,11 @@ pub fn load_afk_events(
         return Ok(Vec::new());
     }
 
-    let placeholders: String = bucket_keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let placeholders: String = bucket_keys
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
     let query = format!(
         "SELECT timestamp, duration, datastr FROM eventmodel \
          WHERE bucket_id IN ({}) {} \
@@ -143,10 +155,14 @@ pub fn load_afk_events(
         .collect();
 
     if let Some(f) = from {
-        params.push(Box::new(f.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string()));
+        params.push(Box::new(
+            f.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string(),
+        ));
     }
     if let Some(t) = to {
-        params.push(Box::new(t.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string()));
+        params.push(Box::new(
+            t.format("%Y-%m-%d %H:%M:%S%.6f+00:00").to_string(),
+        ));
     }
 
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();

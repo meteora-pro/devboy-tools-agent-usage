@@ -57,25 +57,21 @@ impl LlmConfig {
         }
 
         // URL: TRACK_CLAUDE_LLM_URL → дефолт по provider
-        let api_url = std::env::var("TRACK_CLAUDE_LLM_URL").unwrap_or_else(|_| {
-            match provider {
-                LlmProvider::Anthropic => {
-                    let base = std::env::var("ANTHROPIC_BASE_URL")
-                        .unwrap_or_else(|_| "https://api.z.ai/api/anthropic".to_string());
-                    format!("{}/v1/messages", base)
-                }
-                LlmProvider::OpenAiCompatible => {
-                    "http://localhost:11434/v1/chat/completions".to_string()
-                }
+        let api_url = std::env::var("TRACK_CLAUDE_LLM_URL").unwrap_or_else(|_| match provider {
+            LlmProvider::Anthropic => {
+                let base = std::env::var("ANTHROPIC_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.z.ai/api/anthropic".to_string());
+                format!("{}/v1/messages", base)
+            }
+            LlmProvider::OpenAiCompatible => {
+                "http://localhost:11434/v1/chat/completions".to_string()
             }
         });
 
         // Модель: TRACK_CLAUDE_LLM_MODEL → дефолт по provider
-        let model = std::env::var("TRACK_CLAUDE_LLM_MODEL").unwrap_or_else(|_| {
-            match provider {
-                LlmProvider::Anthropic => "claude-3-5-haiku-20241022".to_string(),
-                LlmProvider::OpenAiCompatible => "qwen2.5:7b".to_string(),
-            }
+        let model = std::env::var("TRACK_CLAUDE_LLM_MODEL").unwrap_or_else(|_| match provider {
+            LlmProvider::Anthropic => "claude-3-5-haiku-20241022".to_string(),
+            LlmProvider::OpenAiCompatible => "qwen2.5:7b".to_string(),
         });
 
         Some(LlmConfig {

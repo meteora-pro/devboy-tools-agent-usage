@@ -131,7 +131,11 @@ pub fn tasks_json(tasks: &[TaskStats]) {
 }
 
 /// Вывод browse stats в JSON
-pub fn browse_json(session: &ClaudeSession, browse_stats: &BrowseStats, terminal_stats: &TerminalFocusStats) {
+pub fn browse_json(
+    session: &ClaudeSession,
+    browse_stats: &BrowseStats,
+    terminal_stats: &TerminalFocusStats,
+) {
     let data = json!({
         "session_id": session.session_id.to_string(),
         "project": session.project_name,

@@ -2,7 +2,9 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
 use crate::claude::session::{AggregatedUsage, ClaudeSession};
 use crate::claude::tokens;
-use crate::correlation::models::{BrowseStats, CorrelatedSession, TaskGroupSource, TaskStats, TerminalFocusStats, TurnFocusInfo};
+use crate::correlation::models::{
+    BrowseStats, CorrelatedSession, TaskGroupSource, TaskStats, TerminalFocusStats, TurnFocusInfo,
+};
 
 /// Таблица списка проектов
 pub fn projects_table(projects: &[(String, usize, AggregatedUsage)]) {
@@ -10,7 +12,13 @@ pub fn projects_table(projects: &[(String, usize, AggregatedUsage)]) {
     table
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["Project", "Sessions", "Tokens (in)", "Tokens (out)", "Cost"]);
+        .set_header(vec![
+            "Project",
+            "Sessions",
+            "Tokens (in)",
+            "Tokens (out)",
+            "Cost",
+        ]);
 
     for (name, sessions, usage) in projects {
         table.add_row(vec![
@@ -355,7 +363,12 @@ pub fn tasks_table(tasks: &[TaskStats], with_aw: bool) {
             if t.session_ids.len() <= max_show {
                 t.session_ids.join(", ")
             } else {
-                let shown: Vec<&str> = t.session_ids.iter().take(max_show).map(|s| s.as_str()).collect();
+                let shown: Vec<&str> = t
+                    .session_ids
+                    .iter()
+                    .take(max_show)
+                    .map(|s| s.as_str())
+                    .collect();
                 format!("{} +{}", shown.join(", "), t.session_ids.len() - max_show)
             }
         };
@@ -371,13 +384,13 @@ pub fn tasks_table(tasks: &[TaskStats], with_aw: bool) {
         if with_aw {
             let human_time = t
                 .human_time_secs
-                .map(|h| format_duration_secs(h))
+                .map(format_duration_secs)
                 .unwrap_or_else(|| "N/A".to_string());
             row.push(Cell::new(&human_time));
 
             let dirty_time = t
                 .dirty_human_time_secs
-                .map(|d| format_duration_secs(d))
+                .map(format_duration_secs)
                 .unwrap_or_else(|| "N/A".to_string());
             row.push(Cell::new(&dirty_time));
         }
@@ -560,7 +573,15 @@ pub fn session_detail_enhanced(
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     // Заголовки
-    let mut headers: Vec<&str> = vec!["#", "Time", "Wait", "User Message", "Tools", "Model", "Cost"];
+    let mut headers: Vec<&str> = vec![
+        "#",
+        "Time",
+        "Wait",
+        "User Message",
+        "Tools",
+        "Model",
+        "Cost",
+    ];
     if has_focus {
         headers.push("Focus");
     }
@@ -572,7 +593,7 @@ pub fn session_detail_enhanced(
     for (i, turn) in session.turns.iter().enumerate() {
         // Вставляем chunk summary перед группами по 30 turns (кроме первой)
         if i > 0 && i % chunk_size == 0 {
-            if let Some(ref chunks) = chunk_summaries {
+            if let Some(chunks) = chunk_summaries {
                 let chunk_idx = (i / chunk_size) - 1;
                 if let Some((_, summary, _)) = chunks.get(chunk_idx) {
                     let truncated = if summary.len() > 120 {
@@ -612,10 +633,7 @@ pub fn session_detail_enhanced(
             .unwrap_or("?");
 
         // User message (truncated)
-        let user_msg = turn
-            .user_message_preview
-            .as_deref()
-            .unwrap_or("-");
+        let user_msg = turn.user_message_preview.as_deref().unwrap_or("-");
         let user_msg_short = if user_msg.len() > 50 {
             format!("{}...", &user_msg[..47])
         } else {
@@ -626,7 +644,8 @@ pub fn session_detail_enhanced(
         let tools = if turn.tool_calls.is_empty() {
             "-".to_string()
         } else {
-            let mut tool_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            let mut tool_counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
             for tc in &turn.tool_calls {
                 *tool_counts.entry(tc.as_str()).or_default() += 1;
             }
@@ -667,7 +686,7 @@ pub fn session_detail_enhanced(
         ];
 
         if has_focus {
-            let focus_str = if let Some(ref focus) = turn_focus {
+            let focus_str = if let Some(focus) = turn_focus {
                 if let Some(fi) = focus.get(i) {
                     if fi.was_afk {
                         "AFK".to_string()
@@ -686,7 +705,7 @@ pub fn session_detail_enhanced(
                 "N/A".to_string()
             };
 
-            let focus_cell = if let Some(ref focus) = turn_focus {
+            let focus_cell = if let Some(focus) = turn_focus {
                 if let Some(fi) = focus.get(i) {
                     if fi.was_afk {
                         Cell::new(&focus_str).fg(Color::Red)
@@ -708,9 +727,9 @@ pub fn session_detail_enhanced(
     }
 
     // Последний chunk summary (если turns > chunk_size)
-    if let Some(ref chunks) = chunk_summaries {
+    if let Some(chunks) = chunk_summaries {
         let last_chunk_idx = session.turns.len() / chunk_size;
-        if session.turns.len() % chunk_size != 0 || last_chunk_idx > 0 {
+        if !session.turns.len().is_multiple_of(chunk_size) || last_chunk_idx > 0 {
             // Показываем последний chunk summary если он не был показан
             let displayed_chunks = if session.turns.len() > chunk_size {
                 (session.turns.len() / chunk_size) - 1
@@ -741,7 +760,11 @@ pub fn session_detail_enhanced(
 }
 
 /// Таблица браузерных страниц + сводка по Claude сессии
-pub fn browse_table(session: &ClaudeSession, browse_stats: &BrowseStats, terminal_stats: &TerminalFocusStats) {
+pub fn browse_table(
+    session: &ClaudeSession,
+    browse_stats: &BrowseStats,
+    terminal_stats: &TerminalFocusStats,
+) {
     println!(
         "Browser pages during session {}:\n",
         &session.session_id.to_string()[..8]
@@ -833,7 +856,8 @@ pub fn browse_table(session: &ClaudeSession, browse_stats: &BrowseStats, termina
     }
 
     // Статистика фокуса терминала
-    let total_session_time = terminal_stats.total_processing_secs + terminal_stats.total_thinking_secs;
+    let total_session_time =
+        terminal_stats.total_processing_secs + terminal_stats.total_thinking_secs;
     let accounted_time = terminal_stats.human_focused_secs
         + terminal_stats.agent_autonomous_secs
         + terminal_stats.other_app_secs
@@ -848,11 +872,23 @@ pub fn browse_table(session: &ClaudeSession, browse_stats: &BrowseStats, termina
             .set_header(vec!["Metric", "Time", "%"]);
 
         // Используем accounted_time для процентов (нормализация при перекрытиях AW событий)
-        let pct_base = if accounted_time > 0.0 { accounted_time } else { total_session_time };
+        let pct_base = if accounted_time > 0.0 {
+            accounted_time
+        } else {
+            total_session_time
+        };
 
         let rows: Vec<(&str, f64, Color)> = vec![
-            ("Human focused (this terminal)", terminal_stats.human_focused_secs, Color::Green),
-            ("Agent autonomous (processing)", terminal_stats.agent_autonomous_secs, Color::Cyan),
+            (
+                "Human focused (this terminal)",
+                terminal_stats.human_focused_secs,
+                Color::Green,
+            ),
+            (
+                "Agent autonomous (processing)",
+                terminal_stats.agent_autonomous_secs,
+                Color::Cyan,
+            ),
             ("Other apps", terminal_stats.other_app_secs, Color::Yellow),
             ("AFK", terminal_stats.afk_secs, Color::Red),
         ];

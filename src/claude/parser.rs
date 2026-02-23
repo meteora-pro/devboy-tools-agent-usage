@@ -45,7 +45,7 @@ pub fn discover_jsonl_files(claude_projects_dir: &Path) -> Result<Vec<JsonlFileI
         let (project_name, project_path) = project_dir
             .and_then(|d| d.file_name())
             .and_then(|n| n.to_str())
-            .map(|dir_name| extract_project_info(dir_name))
+            .map(extract_project_info)
             .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
 
         files.push(JsonlFileInfo {
@@ -118,10 +118,7 @@ fn restore_path_by_checking_fs(dir_name: &str) -> Option<String> {
         let mut found = false;
         // Пробуем все возможные длины для текущего компонента
         // от самого длинного к самому короткому
-        let dashes: Vec<usize> = remaining
-            .match_indices('-')
-            .map(|(i, _)| i)
-            .collect();
+        let dashes: Vec<usize> = remaining.match_indices('-').map(|(i, _)| i).collect();
 
         // Сначала пробуем взять всё remaining как последний компонент
         // (с вариантами дефисов/подчёркиваний)
@@ -167,7 +164,8 @@ fn restore_path_by_checking_fs(dir_name: &str) -> Option<String> {
 
 /// Потоковый парсинг JSONL файла — не загружаем весь файл в память
 pub fn parse_jsonl_file(path: &Path) -> Result<Vec<ClaudeEvent>> {
-    let file = File::open(path).with_context(|| format!("Не удалось открыть {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("Не удалось открыть {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut events = Vec::new();
     let mut errors = 0u64;
