@@ -144,6 +144,31 @@ devboy-tools-agent-usage retitle DEV-531 "Multi-project JIRA support"
 
 Title priority: manual (retitle) > LLM > none.
 
+### `install` — Install AI Agent Skills
+
+```bash
+devboy-tools-agent-usage install [--global] [--force] [--agent claude,cursor,windsurf,cline,copilot]
+```
+
+Installs a skill file so AI agents know how to use devboy-tools-agent-usage. Auto-detects which agents are configured in the current directory (looks for `.claude/`, `.cursor/`, `.windsurf/`, `.clinerules`, `.github/`).
+
+| Flag | Description |
+|------|-------------|
+| `-g, --global` | Install globally (Claude Code only: `~/.claude/skills/`) |
+| `-f, --force` | Overwrite existing skill files |
+| `-a, --agent` | Target agents (comma-separated), default: auto-detect |
+
+Supported agents and skill paths:
+
+| Agent | Path |
+|-------|------|
+| Claude Code | `.claude/skills/devboy-tools-agent-usage/SKILL.md` |
+| Claude Code (global) | `~/.claude/skills/devboy-tools-agent-usage/SKILL.md` |
+| Cursor | `.cursor/rules/devboy-tools-agent-usage.mdc` |
+| Windsurf | `.windsurf/rules/devboy-tools-agent-usage.md` |
+| Cline | `.clinerules/devboy-tools-agent-usage.md` |
+| Copilot | `.github/instructions/devboy-tools-agent-usage.instructions.md` |
+
 ### `reclassify` — Re-summarize
 
 ```bash
