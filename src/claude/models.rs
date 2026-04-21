@@ -13,6 +13,9 @@ pub enum ClaudeEvent {
     Summary(SummaryEvent),
     FileHistorySnapshot(FileHistorySnapshot),
     QueueOperation(QueueOperationEvent),
+    Attachment(AttachmentEvent),
+    #[serde(other)]
+    Unknown,
 }
 
 impl ClaudeEvent {
@@ -25,6 +28,8 @@ impl ClaudeEvent {
             ClaudeEvent::Summary(e) => e.timestamp,
             ClaudeEvent::FileHistorySnapshot(e) => e.timestamp,
             ClaudeEvent::QueueOperation(e) => e.timestamp,
+            ClaudeEvent::Attachment(e) => Some(e.base.timestamp),
+            ClaudeEvent::Unknown => None,
         }
     }
 
@@ -37,6 +42,8 @@ impl ClaudeEvent {
             ClaudeEvent::Summary(_) => None,
             ClaudeEvent::FileHistorySnapshot(_) => None,
             ClaudeEvent::QueueOperation(e) => e.session_id,
+            ClaudeEvent::Attachment(e) => Some(e.base.session_id),
+            ClaudeEvent::Unknown => None,
         }
     }
 
@@ -46,6 +53,7 @@ impl ClaudeEvent {
             ClaudeEvent::Assistant(e) => e.base.is_sidechain.unwrap_or(false),
             ClaudeEvent::Progress(e) => e.base.is_sidechain.unwrap_or(false),
             ClaudeEvent::System(e) => e.base.is_sidechain.unwrap_or(false),
+            ClaudeEvent::Attachment(e) => e.base.is_sidechain.unwrap_or(false),
             _ => false,
         }
     }
@@ -177,6 +185,15 @@ pub struct FileHistorySnapshot {
     pub timestamp: Option<DateTime<Utc>>,
     pub message_id: Option<Uuid>,
     pub is_snapshot_update: Option<bool>,
+}
+
+/// Attachment event (mcp_instructions_delta, deferred_tools_delta, skill_listing, command_permissions)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentEvent {
+    #[serde(flatten)]
+    pub base: EventBase,
+    pub attachment: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

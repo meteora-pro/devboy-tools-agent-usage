@@ -193,6 +193,102 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Анализ гипотезы обогащения контекста: корреляция chars_per_item → enrichment calls
+    /// Показывает: при малом контексте айтема агент делает больше follow-up вызовов
+    ContextEnrichment {
+        /// Фильтр по исходному инструменту (default: get_issues)
+        #[arg(short, long, default_value = "get_issues")]
+        tool: String,
+
+        /// Фильтр по проекту (подстрока в имени)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Формат вывода
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
+    /// Анализ поведения агента после получения больших MCP ответов
+    /// Показывает что агент делал в том же turn'е и следующем после большого ответа
+    ToolBehavior {
+        /// Фильтр по инструменту (подстрока, например "issues")
+        #[arg(short, long)]
+        tool: Option<String>,
+
+        /// Порог "большого" ответа в символах (default: 14000 ≈ 4k tokens)
+        #[arg(long, default_value = "14000")]
+        large_threshold: usize,
+
+        /// Фильтр по проекту (подстрока в имени)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Формат вывода
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
+    /// Статистика размеров ответов MCP инструментов (chars, lines, percentiles)
+    /// Показывает сколько токенов реально возвращают pipeline инструменты
+    ToolResponseStats {
+        /// Фильтр по проекту (подстрока в имени)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Формат вывода
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
+    /// Анализ поведенческих паттернов использования MCP pipeline инструментов
+    /// Показывает p₁ (вероятность что первого чанка достаточно) и E[chunks] по инструментам
+    McpPatterns {
+        /// Фильтр по проекту (подстрока в имени)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Показать детали по инвокациям (все вызовы)
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
+
+        /// Формат вывода
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Установить skill для AI-агентов (Claude Code, Cursor, Windsurf, Cline, Copilot)
     Install {
         /// Установить глобально (только для Claude Code)

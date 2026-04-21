@@ -138,6 +138,70 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::ContextEnrichment {
+            tool,
+            project,
+            from,
+            to,
+            format,
+        } => {
+            output::commands::context_enrichment(
+                &config,
+                &tool,
+                project.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                &format,
+            )?;
+        }
+        Commands::ToolBehavior {
+            tool,
+            large_threshold,
+            project,
+            from,
+            to,
+            format,
+        } => {
+            output::commands::tool_behavior(
+                &config,
+                tool.as_deref(),
+                large_threshold,
+                project.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                &format,
+            )?;
+        }
+        Commands::ToolResponseStats {
+            project,
+            from,
+            to,
+            format,
+        } => {
+            output::commands::tool_response_stats(
+                &config,
+                project.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                &format,
+            )?;
+        }
+        Commands::McpPatterns {
+            project,
+            from,
+            to,
+            verbose,
+            format,
+        } => {
+            output::commands::mcp_patterns(
+                &config,
+                project.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                verbose,
+                &format,
+            )?;
+        }
         Commands::Install {
             global,
             force,

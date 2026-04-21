@@ -2,3 +2,4 @@
 Cargo.lock
 .env
 npm/agent-usage-*/bin/
+.claude/

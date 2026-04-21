@@ -49,6 +49,52 @@ impl ClaudeSession {
     }
 }
 
+/// Статистика по одному ответу tool'а (размер, ошибка)
+#[derive(Debug, Clone)]
+pub struct ToolResultStats {
+    /// Полное MCP имя: mcp__dev-boy__get_issues
+    pub full_tool_name: String,
+    /// Короткое имя: get_issues
+    pub tool_name: String,
+    /// Размер ответа в символах
+    pub content_chars: usize,
+    /// Количество строк в ответе
+    pub content_lines: usize,
+    /// Был ли ответ ошибкой
+    pub is_error: bool,
+    /// Айтемов показано в этом ответе (из [chunks] N/M или подсчёт TOON)
+    pub items_shown: Option<usize>,
+    /// Всего айтемов доступно (из [chunks] N/M; None если нет пагинации)
+    pub items_total: Option<usize>,
+    /// Символов на один показанный айтем (content_chars / items_shown)
+    pub chars_per_item: Option<f64>,
+    /// Все другие tool calls в том же turn'е после этого ответа
+    /// (name, detail) — для анализа что агент делал дальше
+    pub same_turn_followups: Vec<(String, String)>,
+}
+
+/// Вызов MCP pipeline-инструмента (get_issues, get_merge_requests и т.д.)
+#[derive(Debug, Clone)]
+pub struct McpCallInfo {
+    /// Полное имя: mcp__dev-boy_car-project__get_issues
+    pub full_name: String,
+    /// Короткое имя после последнего "__": get_issues
+    pub tool_name: String,
+    /// Параметр chunk (для пагинации). None = первый запрос.
+    pub chunk: Option<u64>,
+    /// Ключ элемента (gitlab#799, gh#123) если есть в параметрах
+    pub item_key: Option<String>,
+    /// Timestamp вызова
+    pub timestamp: DateTime<Utc>,
+}
+
+impl McpCallInfo {
+    /// Это follow-up запрос (chunk > 1)?
+    pub fn is_follow_up(&self) -> bool {
+        self.chunk.map_or(false, |c| c > 1)
+    }
+}
+
 /// Один "ход" — запрос пользователя + ответ ассистента
 #[derive(Debug)]
 pub struct Turn {
@@ -59,6 +105,10 @@ pub struct Turn {
     pub tool_calls: Vec<String>,
     /// Детали tool calls: (name, short_detail) — путь файла, паттерн, команда и т.д.
     pub tool_call_details: Vec<(String, String)>,
+    /// MCP pipeline вызовы (get_issues, get_merge_requests и т.д.)
+    pub mcp_calls: Vec<McpCallInfo>,
+    /// Размеры ответов от MCP pipeline инструментов
+    pub tool_results: Vec<ToolResultStats>,
     pub usage: Option<TokenUsage>,
     pub model: Option<String>,
     /// Git branch на момент этого turn (из UserEvent)
@@ -174,7 +224,7 @@ impl SessionBuilder {
         // Сортируем по timestamp
         self.events.sort_by_key(|(e, _)| e.timestamp());
 
-        let mut turns = Vec::new();
+        let mut turns: Vec<Turn> = Vec::new();
         let mut total_usage = AggregatedUsage::default();
         let mut git_branch: Option<String> = None;
         let mut version: Option<String> = None;
@@ -190,6 +240,8 @@ impl SessionBuilder {
         let mut user_previews: HashMap<Uuid, Option<String>> = HashMap::new();
         // Собираем compaction events
         let mut compactions: Vec<CompactionEvent> = Vec::new();
+        // Карта tool_use_id → full_tool_name (для связки tool_result с tool_use)
+        let mut tool_id_to_name: HashMap<String, String> = HashMap::new();
 
         // Первый проход: собираем метаданные и turn_duration
         // (используем ВСЕ события для метаданных, включая subagent)
@@ -248,10 +300,16 @@ impl SessionBuilder {
         }
 
         // Считаем стоимость из ВСЕХ assistant событий (включая subagent)
+        // Также строим карту tool_use_id → tool_name для связки с tool_result
         for (event, _) in &self.events {
             if let ClaudeEvent::Assistant(e) = event {
                 if let Some(ref u) = e.message.usage {
                     total_usage.add(u, e.message.model.as_deref().unwrap_or("unknown"));
+                }
+                for block in &e.message.content {
+                    if let ContentBlock::ToolUse { id, name, .. } = block {
+                        tool_id_to_name.insert(id.clone(), name.clone());
+                    }
                 }
             }
         }
@@ -269,10 +327,23 @@ impl SessionBuilder {
 
             match event {
                 ClaudeEvent::User(e) => {
-                    // Пропускаем internal/tool_result сообщения
+                    // Пропускаем internal сообщения
                     if e.user_type.as_deref() == Some("internal") {
                         continue;
                     }
+
+                    // Парсим tool_result блоки — измеряем размер ответов MCP инструментов
+                    if let Some(ref msg) = e.message {
+                        let results = extract_tool_results(msg, &tool_id_to_name);
+                        if !results.is_empty() {
+                            if let Some(last_turn) = turns.last_mut() {
+                                last_turn.tool_results.extend(results);
+                            }
+                            // tool_result события не начинают новый turn — пропускаем
+                            continue;
+                        }
+                    }
+
                     // Если есть необработанный user без assistant — добавляем turn без ответа
                     if let Some(user_ts) = pending_user_ts {
                         let branch = pending_user_uuid
@@ -285,6 +356,8 @@ impl SessionBuilder {
                             turn_duration_ms: None,
                             tool_calls: Vec::new(),
                             tool_call_details: Vec::new(),
+                            mcp_calls: Vec::new(),
+                            tool_results: Vec::new(),
                             usage: None,
                             model: None,
                             git_branch: branch,
@@ -298,6 +371,7 @@ impl SessionBuilder {
                 ClaudeEvent::Assistant(e) => {
                     let tool_calls = extract_tool_calls(e);
                     let tool_call_details = extract_tool_call_details(e);
+                    let mcp_calls = extract_mcp_calls(e);
 
                     if pending_user_ts.is_some() {
                         // Нормальный turn: user → assistant
@@ -324,6 +398,8 @@ impl SessionBuilder {
                             turn_duration_ms,
                             tool_calls,
                             tool_call_details,
+                            mcp_calls,
+                            tool_results: Vec::new(),
                             usage,
                             model,
                             git_branch: branch,
@@ -339,6 +415,7 @@ impl SessionBuilder {
                         last_turn.assistant_timestamp = Some(e.base.timestamp);
                         last_turn.tool_calls.extend(tool_calls);
                         last_turn.tool_call_details.extend(tool_call_details);
+                        last_turn.mcp_calls.extend(mcp_calls);
                         if let Some(ref u) = e.message.usage {
                             match &mut last_turn.usage {
                                 Some(existing) => {
@@ -365,6 +442,42 @@ impl SessionBuilder {
 
         // Сортируем compaction events по timestamp
         compactions.sort_by_key(|c| c.timestamp);
+
+        // Постобработка: заполняем same_turn_followups для каждого tool_result.
+        // Follow-ups = все tool_call_details того же turn'а, кроме самого этого инструмента.
+        for turn in &mut turns {
+            if turn.tool_results.is_empty() {
+                continue;
+            }
+            // Все non-MCP tool calls этого turn'а — потенциальные follow-ups
+            let non_mcp_calls: Vec<(String, String)> = turn
+                .tool_call_details
+                .iter()
+                .filter(|(name, _)| !name.starts_with("mcp__"))
+                .cloned()
+                .collect();
+            // MCP calls этого turn'а — могут быть drill-down (get_issue после get_issues)
+            let mcp_calls_in_turn: Vec<(String, String)> = turn
+                .tool_call_details
+                .iter()
+                .filter(|(name, _)| name.starts_with("mcp__"))
+                .cloned()
+                .collect();
+
+            for result in &mut turn.tool_results {
+                // Не добавляем сам инструмент в follow-ups
+                let followups: Vec<(String, String)> = non_mcp_calls
+                    .iter()
+                    .chain(mcp_calls_in_turn.iter())
+                    .filter(|(name, _)| {
+                        // Исключаем вызов того же инструмента (он уже в tool_results)
+                        mcp_short_name(name) != result.tool_name
+                    })
+                    .cloned()
+                    .collect();
+                result.same_turn_followups = followups;
+            }
+        }
 
         Some(ClaudeSession {
             session_id: self.session_id,
@@ -471,6 +584,53 @@ pub fn is_non_task_branch(branch: &str) -> bool {
         branch.to_lowercase().as_str(),
         "main" | "master" | "head" | "develop" | "dev" | "staging" | "production" | "release"
     )
+}
+
+/// Pipeline-инструменты, для которых отслеживаем паттерны пагинации
+pub const PIPELINE_TOOLS: &[&str] = &[
+    "get_issues",
+    "get_merge_requests",
+    "get_merge_request_diffs",
+    "get_issue_comments",
+    "get_merge_request_discussions",
+    "get_messages",
+    "search_issues",
+    "search_merge_requests",
+];
+
+/// Извлечь короткое имя из полного MCP tool name
+/// "mcp__dev-boy_car-project__get_issues" → "get_issues"
+fn mcp_short_name(full_name: &str) -> &str {
+    full_name.rsplit("__").next().unwrap_or(full_name)
+}
+
+/// Извлечь MCP pipeline вызовы из assistant event
+fn extract_mcp_calls(event: &AssistantEvent) -> Vec<McpCallInfo> {
+    event
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolUse { name, input, .. } if name.starts_with("mcp__") => {
+                let tool_name = mcp_short_name(name).to_string();
+                if !PIPELINE_TOOLS.contains(&tool_name.as_str()) {
+                    return None;
+                }
+                let chunk = input.get("chunk").and_then(|v| v.as_u64());
+                let item_key = ["key", "issueKey", "mrKey", "issue_key", "mr_key"]
+                    .iter()
+                    .find_map(|k| input.get(*k).and_then(|v| v.as_str()).map(String::from));
+                Some(McpCallInfo {
+                    full_name: name.clone(),
+                    tool_name,
+                    chunk,
+                    item_key,
+                    timestamp: event.base.timestamp,
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Извлечь имена tool calls из assistant event
@@ -620,15 +780,177 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Извлечь деталь из MCP tool input — берём первое строковое значение из параметров
-fn extract_mcp_detail(input: &serde_json::Value) -> String {
-    if let Some(obj) = input.as_object() {
-        // Приоритетные ключи для MCP
-        for key in &["issueKey", "mrKey", "query", "chatKey", "body", "title"] {
-            if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
-                return truncate_str(val, 50);
+/// Распарсить количество айтемов из содержимого ответа.
+/// Возвращает (items_shown, items_total):
+///   - из маркера `[chunks] N/M ...`
+///   - или из подсчёта TOON-заголовков (#number или key#number)
+///   - или (None, None) если не удалось определить
+fn parse_item_counts(content: &str) -> (Option<usize>, Option<usize>) {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // 1. "Showing N-M of TOTAL" — формат get_meeting_transcript и аналогичных
+    //    Пример: "Showing 1-300 of 676 | ←0 before | 376 after→"
+    static SHOWING_RE: OnceLock<Regex> = OnceLock::new();
+    let showing_re = SHOWING_RE.get_or_init(|| {
+        Regex::new(r"Showing\s+\d+-(\d+)\s+of\s+(\d+)").unwrap()
+    });
+    if let Some(cap) = showing_re.captures(content) {
+        let shown: usize = cap[1].parse().unwrap_or(0);
+        let total: usize = cap[2].parse().unwrap_or(0);
+        if shown > 0 {
+            return (Some(shown), Some(total));
+        }
+    }
+
+    // 2. "[chunks] N/M" — формат devboy chunk pagination
+    static CHUNKS_RE: OnceLock<Regex> = OnceLock::new();
+    let chunks_re = CHUNKS_RE.get_or_init(|| {
+        Regex::new(r"\[chunks\]\s+(\d+)/(\d+)").unwrap()
+    });
+    if let Some(cap) = chunks_re.captures(content) {
+        let shown: usize = cap[1].parse().unwrap_or(0);
+        let total: usize = cap[2].parse().unwrap_or(0);
+        if shown > 0 {
+            return (Some(shown), Some(total));
+        }
+    }
+
+    // 3. Markdown table — строки вида "| gitlab#123 |" или "| gh#456 |"
+    //    Формат get_issues, get_merge_requests, get_epics и т.д.
+    static TABLE_ITEM_RE: OnceLock<Regex> = OnceLock::new();
+    let table_re = TABLE_ITEM_RE.get_or_init(|| {
+        Regex::new(r"(?m)^\|\s+(?:[a-zA-Z_-]*#\d+|!\d+)\s+\|").unwrap()
+    });
+    let count = table_re.find_iter(content).count();
+    if count > 0 {
+        return (Some(count), None); // пагинации нет — всё влезло
+    }
+
+    // 4. TOON-заголовки: строки вида "gitlab#123 Title" или "#123 Title"
+    static TOON_ITEM_RE: OnceLock<Regex> = OnceLock::new();
+    let toon_re = TOON_ITEM_RE.get_or_init(|| {
+        Regex::new(r"(?m)^(?:[a-zA-Z_-]*#\d+|!\d+)\s+\S").unwrap()
+    });
+    let count = toon_re.find_iter(content).count();
+    if count > 0 {
+        return (Some(count), None);
+    }
+
+    // 5. JSON массив верхнего уровня
+    if content.trim_start().starts_with('[') {
+        if let Ok(serde_json::Value::Array(arr)) =
+            serde_json::from_str::<serde_json::Value>(content)
+        {
+            let n = arr.len();
+            if n > 0 {
+                return (Some(n), None);
             }
         }
+    }
+
+    (None, None)
+}
+
+/// Извлечь статистику ответов tool'ов из user-сообщения с tool_result блоками
+/// Возвращает только MCP pipeline инструменты (get_issues, get_merge_requests и т.д.)
+fn extract_tool_results(
+    msg: &super::models::UserMessage,
+    tool_id_to_name: &HashMap<String, String>,
+) -> Vec<ToolResultStats> {
+    let arr = match &msg.content {
+        serde_json::Value::Array(a) => a,
+        _ => return Vec::new(),
+    };
+
+    arr.iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? != "tool_result" {
+                return None;
+            }
+            let tool_use_id = block.get("tool_use_id")?.as_str()?;
+            let full_tool_name = tool_id_to_name.get(tool_use_id)?;
+
+            // Интересуемся только MCP инструментами
+            if !full_tool_name.starts_with("mcp__") {
+                return None;
+            }
+
+            let tool_name = mcp_short_name(full_tool_name).to_string();
+            let is_error = block
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            // Измеряем размер содержимого
+            let content_str = match block.get("content") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Array(parts)) => {
+                    // Массив content blocks — склеиваем текстовые части
+                    parts
+                        .iter()
+                        .filter_map(|p| {
+                            if p.get("type")?.as_str()? == "text" {
+                                p.get("text")?.as_str().map(str::to_string)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                }
+                _ => String::new(),
+            };
+
+            let content_chars = content_str.len();
+            let content_lines = if content_chars == 0 {
+                0
+            } else {
+                content_str.lines().count()
+            };
+
+            let (items_shown, items_total) = parse_item_counts(&content_str);
+            let chars_per_item = items_shown
+                .filter(|&n| n > 0)
+                .map(|n| content_chars as f64 / n as f64);
+
+            Some(ToolResultStats {
+                full_tool_name: full_tool_name.clone(),
+                tool_name,
+                content_chars,
+                content_lines,
+                is_error,
+                items_shown,
+                items_total,
+                chars_per_item,
+                same_turn_followups: Vec::new(), // заполняется после построения turn'а
+            })
+        })
+        .collect()
+}
+
+/// Извлечь деталь из MCP tool input — включая chunk для pipeline инструментов
+fn extract_mcp_detail(input: &serde_json::Value) -> String {
+    if let Some(obj) = input.as_object() {
+        let mut parts = Vec::new();
+
+        // Chunk param — показываем явно для pipeline инструментов
+        if let Some(chunk) = obj.get("chunk").and_then(|v| v.as_u64()) {
+            parts.push(format!("chunk={}", chunk));
+        }
+
+        // Приоритетные ключи
+        for key in &["key", "issueKey", "mrKey", "query", "chatKey", "title"] {
+            if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
+                parts.push(truncate_str(val, 40));
+                break;
+            }
+        }
+
+        if !parts.is_empty() {
+            return parts.join(" ");
+        }
+
         // Fallback: первое строковое значение
         for (_k, v) in obj {
             if let Some(s) = v.as_str() {
