@@ -1,6 +1,4 @@
 use anyhow::{Context, Result};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use super::models::ClaudeEvent;
@@ -162,28 +160,87 @@ fn restore_path_by_checking_fs(dir_name: &str) -> Option<String> {
     }
 }
 
-/// Потоковый парсинг JSONL файла — не загружаем весь файл в память
+/// Заменяет буквальные символы новой строки внутри JSON-строк на escape-последовательности.
+///
+/// Логи Claude Code иногда содержат tool responses с содержимым файлов,
+/// где символы `\n` не экранированы. По стандарту JSON это невалидно,
+/// но обрабатываем gracefully.
+fn escape_literal_newlines_in_strings(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut in_string = false;
+    let bytes = content.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if in_string {
+            match b {
+                b'\\' if i + 1 < bytes.len() => {
+                    // Escape-последовательность — копируем два байта как есть
+                    output.push(b as char);
+                    output.push(bytes[i + 1] as char);
+                    i += 2;
+                    continue;
+                }
+                b'"' => {
+                    in_string = false;
+                    output.push('"');
+                }
+                b'\n' => {
+                    // Буквальный перенос строки внутри JSON-строки — экранируем
+                    output.push('\\');
+                    output.push('n');
+                }
+                b'\r' => {
+                    output.push('\\');
+                    output.push('r');
+                }
+                _ => {
+                    output.push(b as char);
+                }
+            }
+        } else {
+            match b {
+                b'"' => {
+                    in_string = true;
+                    output.push('"');
+                }
+                _ => {
+                    output.push(b as char);
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    output
+}
+
+/// Потоковый парсинг JSONL файла.
+///
+/// Корректно обрабатывает записи, чьи строковые поля содержат буквальные
+/// символы перевода строки (невалидный JSONL, но реально встречается в логах
+/// Claude Code при больших tool responses с содержимым файлов).
 pub fn parse_jsonl_file(path: &Path) -> Result<Vec<ClaudeEvent>> {
-    let file =
-        File::open(path).with_context(|| format!("Не удалось открыть {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Не удалось открыть {}", path.display()))?;
+
+    // Исправляем буквальные переносы строк внутри JSON-строк
+    let content = escape_literal_newlines_in_strings(&raw);
+
     let mut events = Vec::new();
     let mut errors = 0u64;
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => {
-                errors += 1;
-                continue;
-            }
-        };
-
-        if line.trim().is_empty() {
+    // Читаем построчно: после pre-processing каждая запись — одна строка
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
             continue;
         }
 
-        match serde_json::from_str::<ClaudeEvent>(&line) {
+        match serde_json::from_str::<ClaudeEvent>(line) {
             Ok(event) => events.push(event),
             Err(_) => {
                 errors += 1;
@@ -193,7 +250,7 @@ pub fn parse_jsonl_file(path: &Path) -> Result<Vec<ClaudeEvent>> {
 
     if errors > 0 {
         eprintln!(
-            "  Предупреждение: {} строк не удалось распарсить в {}",
+            "  Предупреждение: {} записей не удалось распарсить в {}",
             errors,
             path.display()
         );
