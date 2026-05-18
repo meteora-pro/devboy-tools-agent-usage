@@ -6,6 +6,7 @@ mod claude;
 mod cli;
 mod config;
 mod correlation;
+mod index;
 mod output;
 
 use anyhow::Result;

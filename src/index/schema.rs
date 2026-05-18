@@ -1,0 +1,247 @@
+//! SQLite schema индекса + миграции.
+//!
+//! Путь к БД: `$XDG_CACHE_HOME/devboy-tools-agent-usage/index.db`
+//! (на Linux: `~/.cache/devboy-tools-agent-usage/index.db`).
+//!
+//! Schema version хранится в таблице `schema_versions`. При увеличении
+//! `SCHEMA_VERSION` нужно добавить новую миграцию в `migrate()`.
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
+
+/// Текущая версия схемы. Инкрементируется при добавлении миграций.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// Путь к БД индекса в XDG cache dir.
+pub fn index_db_path() -> Result<PathBuf> {
+    let cache = dirs::cache_dir().context("Не удалось определить XDG cache directory")?;
+    let dir = cache.join("devboy-tools-agent-usage");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Не удалось создать {}", dir.display()))?;
+    Ok(dir.join("index.db"))
+}
+
+/// Открыть индекс по дефолтному пути (XDG cache), применить миграции.
+pub fn open_index() -> Result<Connection> {
+    let path = index_db_path()?;
+    open_index_at(&path)
+}
+
+/// Открыть индекс по конкретному пути. Используется тестами и при кастомных
+/// деплойментах (например, общая БД на несколько машин).
+pub fn open_index_at(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)
+        .with_context(|| format!("Не удалось открыть SQLite БД по пути {}", path.display()))?;
+
+    // WAL для concurrent read во время write (statusline читает пока indexer пишет).
+    // synchronous=NORMAL — безопасный trade-off между производительностью и durability:
+    // потеря последних транзакций возможна только при OS crash, не при процесс-крэше.
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode=WAL;
+        PRAGMA synchronous=NORMAL;
+        PRAGMA foreign_keys=ON;
+        PRAGMA temp_store=MEMORY;
+        ",
+    )
+    .context("Не удалось настроить PRAGMA")?;
+
+    migrate(&conn).context("Не удалось применить миграции схемы")?;
+    Ok(conn)
+}
+
+/// Применить миграции схемы по очереди от текущей версии до `SCHEMA_VERSION`.
+fn migrate(conn: &Connection) -> Result<()> {
+    // schema_versions всегда существует — создаём первой, если БД пустая.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_versions (
+            version    INTEGER PRIMARY KEY,
+            applied_at TEXT    NOT NULL
+        );",
+    )?;
+
+    let current: u32 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    if current < 1 {
+        apply_v1(conn)?;
+    }
+
+    Ok(())
+}
+
+/// Миграция v1 — создание базовых таблиц для индекса.
+///
+/// - `parsed_files` — watermark per JSONL (mtime + last_offset для append-only логов).
+/// - `accounts` — Claude Code аккаунты (заполняется L2.T4 из credentials.json).
+/// - `turns` — фактические записи турнов, главная аналитическая таблица.
+///   Индексы на `ts_ms`, `session_id`, `(account_id, ts_ms)` — для быстрых window queries.
+fn apply_v1(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V1)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (1, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V1: &str = r#"
+CREATE TABLE IF NOT EXISTS parsed_files (
+    path        TEXT PRIMARY KEY,
+    mtime_ns    INTEGER NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    last_offset INTEGER NOT NULL DEFAULT 0,
+    parsed_at   TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id            TEXT PRIMARY KEY,
+    email         TEXT,
+    plan          TEXT,              -- Free | Pro | Max5 | Max20 | Unknown
+    first_seen_ms INTEGER,
+    last_seen_ms  INTEGER,
+    notes         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS turns (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          TEXT    NOT NULL,
+    project             TEXT,
+    ts_ms               INTEGER NOT NULL,
+    model               TEXT,
+    account_id          TEXT,
+    tokens_input        INTEGER NOT NULL DEFAULT 0,
+    tokens_output       INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_create INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read   INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL    NOT NULL DEFAULT 0,
+    FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_turns_ts          ON turns(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_turns_session     ON turns(session_id);
+CREATE INDEX IF NOT EXISTS idx_turns_account_ts  ON turns(account_id, ts_ms);
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn open_tmp() -> (tempfile::TempDir, Connection) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let conn = open_index_at(&path).expect("открытие индекса должно работать");
+        (dir, conn)
+    }
+
+    #[test]
+    fn migration_creates_all_tables() {
+        let (_dir, conn) = open_tmp();
+
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        for required in ["accounts", "parsed_files", "schema_versions", "turns"] {
+            assert!(
+                tables.contains(&required.to_string()),
+                "таблица {} должна существовать, актуальные: {:?}",
+                required,
+                tables
+            );
+        }
+    }
+
+    #[test]
+    fn migration_creates_all_indexes() {
+        let (_dir, conn) = open_tmp();
+
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        for required in ["idx_turns_account_ts", "idx_turns_session", "idx_turns_ts"] {
+            assert!(
+                indexes.contains(&required.to_string()),
+                "индекс {} должен существовать, актуальные: {:?}",
+                required,
+                indexes
+            );
+        }
+    }
+
+    #[test]
+    fn migration_idempotent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.db");
+
+        // Открываем дважды — миграция должна примениться только один раз.
+        let _ = open_index_at(&path).unwrap();
+        let conn = open_index_at(&path).unwrap();
+
+        let count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_versions WHERE version = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "версия 1 должна быть применена ровно один раз");
+    }
+
+    #[test]
+    fn current_schema_version_matches_constant() {
+        let (_dir, conn) = open_tmp();
+        let max: u32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            max, SCHEMA_VERSION,
+            "после открытия БД её версия должна совпадать с SCHEMA_VERSION"
+        );
+    }
+
+    #[test]
+    fn turns_table_accepts_basic_insert() {
+        let (_dir, conn) = open_tmp();
+        conn.execute(
+            "INSERT INTO turns
+             (session_id, project, ts_ms, model, tokens_input, tokens_output, cost_usd)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                "00000000-0000-0000-0000-000000000001",
+                "test/project",
+                1_700_000_000_000_i64,
+                "claude-sonnet-4-6",
+                100,
+                50,
+                0.0015_f64,
+            ],
+        )
+        .expect("insert должен работать");
+
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+}

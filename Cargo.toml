@@ -48,3 +48,7 @@ dirs = "6"
 
 # Регулярные выражения (для извлечения task ID из git branch)
 regex = "1"
+
+[dev-dependencies]
+# Временные директории для тестов (SQLite index, file cache, ...)
+tempfile = "3"
