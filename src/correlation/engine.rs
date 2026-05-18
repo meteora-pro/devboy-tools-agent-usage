@@ -299,6 +299,10 @@ fn is_matching_terminal(app: &str, title: &str, basename: &str) -> bool {
 /// - agent_autonomous: Claude обрабатывает, а пользователь НЕ смотрит на этот терминал
 /// - afk: пользователь AFK
 /// - other_app: пользователь в другом приложении (не AFK)
+///
+/// Оптимизация: not-AFK интервалы извлекаются O(A) один раз для всей сессии,
+/// затем two-pointer проходит через window events и not-AFK интервалы совместно
+/// → O(W + A) за сессию вместо прежнего O(T × W × A).
 pub fn collect_terminal_focus_stats(
     session: &ClaudeSession,
     window_events: &[AwWindowEvent],
@@ -319,6 +323,39 @@ pub fn collect_terminal_focus_stats(
         dirty_human_secs: 0.0,
     };
 
+    // Определяем временной диапазон сессии для предвычисления not-AFK интервалов
+    let session_start = match session.turns.first() {
+        Some(t) => t.user_timestamp,
+        None => return stats,
+    };
+    let session_end = session
+        .turns
+        .iter()
+        .filter_map(|t| t.assistant_timestamp)
+        .max()
+        .unwrap_or(session_start);
+
+    if session_end <= session_start {
+        return stats;
+    }
+
+    // Pre-extract not-AFK интервалы для всей сессии — O(A) один раз
+    let a_start_idx = afk_events.partition_point(|e| e.end_time() <= session_start);
+    let not_afk: Vec<(DateTime<Utc>, DateTime<Utc>)> = afk_events[a_start_idx..]
+        .iter()
+        .take_while(|e| e.timestamp < session_end)
+        .filter(|e| e.status == AfkStatus::NotAfk)
+        .map(|e| {
+            let s = e.timestamp.max(session_start);
+            let en = e.end_time().min(session_end);
+            (s, en)
+        })
+        .filter(|(s, en)| en > s)
+        .collect();
+
+    // Единый указатель в not_afk: продвигается монотонно через все turns сессии
+    let mut ni = 0usize;
+
     for (i, turn) in session.turns.iter().enumerate() {
         let assistant_ts = match turn.assistant_timestamp {
             Some(ts) => ts,
@@ -335,11 +372,12 @@ pub fn collect_terminal_focus_stats(
             stats.total_processing_secs += processing_secs;
             accumulate_focus_for_range(
                 window_events,
-                afk_events,
+                &not_afk,
+                &mut ni,
                 processing_start,
                 processing_end,
                 basename,
-                true, // is_processing
+                true,
                 &mut stats,
             );
         }
@@ -354,11 +392,12 @@ pub fn collect_terminal_focus_stats(
                 stats.total_thinking_secs += thinking_secs;
                 accumulate_focus_for_range(
                     window_events,
-                    afk_events,
+                    &not_afk,
+                    &mut ni,
                     thinking_start,
                     thinking_end,
                     basename,
-                    false, // is_processing
+                    false,
                     &mut stats,
                 );
             }
@@ -368,19 +407,27 @@ pub fn collect_terminal_focus_stats(
     stats
 }
 
-/// Для заданного временного диапазона накопить метрики фокуса
+/// Для заданного временного диапазона накопить метрики фокуса.
+///
+/// not_afk: отсортированные not-AFK интервалы для всей сессии (pre-computed).
+/// ni: текущий указатель в not_afk, продвигается монотонно (two-pointer).
+///
+/// Сложность: O(W' + P') вместо прежнего O(W' × A'), где:
+/// - W' — window events в диапазоне, P' — not-AFK интервалы в диапазоне,
+/// - A' — все AFK события (которые раньше сканировались per window event).
 fn accumulate_focus_for_range(
     window_events: &[AwWindowEvent],
-    afk_events: &[AwAfkEvent],
+    not_afk: &[(DateTime<Utc>, DateTime<Utc>)],
+    ni: &mut usize,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     basename: &str,
     is_processing: bool,
     stats: &mut TerminalFocusStats,
 ) {
-    let start_idx = window_events.partition_point(|e| e.end_time() <= start);
+    let w_start_idx = window_events.partition_point(|e| e.end_time() <= start);
 
-    for event in &window_events[start_idx..] {
+    for event in &window_events[w_start_idx..] {
         if event.timestamp >= end {
             break;
         }
@@ -393,8 +440,30 @@ fn accumulate_focus_for_range(
             continue;
         }
 
-        let afk_in_overlap = afk_seconds_in_range(afk_events, overlap_start, overlap_end);
-        let not_afk_in_overlap = (overlap_secs - afk_in_overlap).max(0.0);
+        // Продвигаем *ni мимо интервалов, закончившихся до начала текущего window event
+        while *ni < not_afk.len() && not_afk[*ni].1 <= overlap_start {
+            *ni += 1;
+        }
+
+        // Суммируем not-AFK время внутри [overlap_start, overlap_end].
+        // scan стартует с *ni, но не сдвигает его — *ni продвигается выше.
+        let mut not_afk_secs = 0.0;
+        let mut scan = *ni;
+        while scan < not_afk.len() {
+            let (na_s, na_e) = not_afk[scan];
+            if na_s >= overlap_end {
+                break;
+            }
+            let inter = ((na_e.min(overlap_end) - na_s.max(overlap_start)).num_milliseconds()
+                as f64
+                / 1000.0)
+                .max(0.0);
+            not_afk_secs += inter;
+            scan += 1;
+        }
+
+        let afk_in_overlap = (overlap_secs - not_afk_secs).max(0.0);
+        let not_afk_in_overlap = not_afk_secs;
 
         let is_this_terminal = is_matching_terminal(&event.app, &event.title, basename);
 
