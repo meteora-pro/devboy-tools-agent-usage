@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::models::ClaudeEvent;
 
@@ -15,10 +17,14 @@ pub struct JsonlFileInfo {
     pub is_subagent: bool,
 }
 
-/// Обнаружить все JSONL файлы в директории Claude Code проектов
+/// Обнаружить все JSONL файлы в директории Claude Code проектов.
+///
+/// При переименовании директории проекта Claude Code копирует JSONL-файл в новую
+/// директорию. Чтобы не обрабатывать одну сессию дважды, дедуплицируем по UUID
+/// сессии (имени файла), оставляя копию с наиболее поздним mtime.
 pub fn discover_jsonl_files(claude_projects_dir: &Path) -> Result<Vec<JsonlFileInfo>> {
     let pattern = format!("{}/**/*.jsonl", claude_projects_dir.display());
-    let mut files = Vec::new();
+    let mut files: Vec<JsonlFileInfo> = Vec::new();
 
     for entry in glob::glob(&pattern).context("Неверный glob паттерн")? {
         let path = entry.context("Ошибка чтения записи glob")?;
@@ -54,7 +60,44 @@ pub fn discover_jsonl_files(claude_projects_dir: &Path) -> Result<Vec<JsonlFileI
         });
     }
 
+    // Дедупликация: если один UUID сессии найден в нескольких директориях
+    // (например, после переименования проекта), оставляем файл с наибольшим mtime.
+    let files = dedup_by_session_uuid(files);
+
     Ok(files)
+}
+
+/// Дедуплицировать список JSONL-файлов по UUID сессии.
+/// Для каждого UUID оставляем только файл с наибольшим mtime.
+fn dedup_by_session_uuid(files: Vec<JsonlFileInfo>) -> Vec<JsonlFileInfo> {
+    // Ключ: (session_uuid, is_subagent) — subagent-файлы дедуплицируются отдельно
+    let mut best: HashMap<(String, bool), (JsonlFileInfo, SystemTime)> = HashMap::new();
+
+    for info in files {
+        let uuid = info
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let mtime = info
+            .path
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let key = (uuid, info.is_subagent);
+        match best.get(&key) {
+            None => {
+                best.insert(key, (info, mtime));
+            }
+            Some((_, existing_mtime)) if mtime > *existing_mtime => {
+                best.insert(key, (info, mtime));
+            }
+            _ => {}
+        }
+    }
+
+    best.into_values().map(|(info, _)| info).collect()
 }
 
 /// Извлечь имя и путь проекта из имени директории
