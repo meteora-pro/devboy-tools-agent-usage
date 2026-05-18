@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod correlation;
 mod index;
+mod limits;
 mod output;
 
 use anyhow::Result;
