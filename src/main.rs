@@ -215,6 +215,14 @@ fn main() -> Result<()> {
         } => {
             output::commands::blocks_cmd(active, account.as_deref(), limit, &format)?;
         }
+        Commands::Limits {
+            account,
+            week,
+            limit,
+            format,
+        } => {
+            output::commands::limits_cmd(account.as_deref(), &week, limit, &format)?;
+        }
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

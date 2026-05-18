@@ -5,6 +5,7 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::account::detection;
 use crate::activity::db;
 use crate::activity::transform;
 use crate::blocks::engine::{self as blocks, Block, BlockFilter};
@@ -16,6 +17,8 @@ use crate::config::Config;
 use crate::correlation::engine;
 use crate::correlation::tasks;
 use crate::index::{indexer, schema};
+use crate::limits::engine as limits_engine;
+use crate::limits::weekly::{self, WeeklyWindow};
 use crate::output::{json, table, timeline};
 
 /// Загрузить и построить сессии с прогресс-баром
@@ -935,6 +938,129 @@ fn agent_label(agent: &Agent) -> &'static str {
         Agent::Cline => "cline",
         Agent::Copilot => "copilot",
     }
+}
+
+/// Команда: weekly limits (% usage от ceiling плана).
+pub fn limits_cmd(
+    account: Option<&str>,
+    week: &str,
+    limit: usize,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+    let anchor = weekly::anchor_ms();
+
+    // Решаем какой account показывать: явный, или из detection (текущий).
+    let account_id: String = match account {
+        Some(a) => a.to_string(),
+        None => match detection::detect_current() {
+            Some(info) => info.id,
+            None => anyhow::bail!(
+                "не удалось определить аккаунт. Используйте --account ID или установите CLAUDE_ACCOUNT."
+            ),
+        },
+    };
+
+    // Какие окна показать.
+    let windows: Vec<WeeklyWindow> = match week {
+        "current" => vec![weekly::current_window(anchor)],
+        "all" => {
+            let current = weekly::current_window(anchor);
+            // last `limit` окон включая текущее. Если "pre" — заменяем на W0.
+            if current.id == "pre" {
+                vec![current]
+            } else {
+                let cur_n: i64 = current.id.trim_start_matches('W').parse().unwrap_or(0);
+                let from = (cur_n + 1).saturating_sub(limit as i64).max(0);
+                (from..=cur_n)
+                    .map(|n| WeeklyWindow::nth(n, anchor))
+                    .collect()
+            }
+        }
+        s => {
+            // Парсим как "W<N>" или просто "<N>"
+            let n: i64 = s
+                .trim_start_matches('W')
+                .parse()
+                .map_err(|_| anyhow::anyhow!("неверный --week: {}", s))?;
+            vec![WeeklyWindow::nth(n, anchor)]
+        }
+    };
+
+    let usages: Vec<_> = windows
+        .into_iter()
+        .map(|w| limits_engine::usage_for(&conn, &account_id, w))
+        .collect::<Result<Vec<_>>>()?;
+
+    match format {
+        OutputFormat::Json => {
+            let v = serde_json::json!({
+                "account_id": account_id,
+                "anchor_ms": anchor,
+                "usages": usages,
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        OutputFormat::Csv => {
+            println!(
+                "window,start,end,plan,used_tokens,cache_tokens,turns,cost_usd,ceiling,percent"
+            );
+            for u in &usages {
+                println!(
+                    "{},{},{},{},{},{},{},{:.4},{},{:.2}",
+                    u.window.id,
+                    iso_from_ms(u.window.start_ms),
+                    iso_from_ms(u.window.end_ms),
+                    u.plan,
+                    u.used_tokens,
+                    u.cache_tokens,
+                    u.turns,
+                    u.cost_usd,
+                    u.ceiling.map(|c| c.to_string()).unwrap_or_default(),
+                    u.percent.unwrap_or(0.0),
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                "window", "start", "plan", "used", "ceiling", "%", "cache", "turns", "cost",
+            ]);
+            for u in &usages {
+                let pct_cell = match u.percent {
+                    Some(p) if p >= 90.0 => Cell::new(format!("{:.1}%", p)).fg(Color::Red),
+                    Some(p) if p >= 70.0 => Cell::new(format!("{:.1}%", p)).fg(Color::Yellow),
+                    Some(p) => Cell::new(format!("{:.1}%", p)).fg(Color::Green),
+                    None => Cell::new("n/a").fg(Color::DarkGrey),
+                };
+                let ceiling = u
+                    .ceiling
+                    .map(|c| format!("{:>11}", c))
+                    .unwrap_or_else(|| "n/a".into());
+                table.add_row(vec![
+                    Cell::new(&u.window.id),
+                    Cell::new(u.window.start_date_utc()),
+                    Cell::new(format!("{}", u.plan)),
+                    Cell::new(format!("{:>11}", u.used_tokens)),
+                    Cell::new(ceiling),
+                    pct_cell,
+                    Cell::new(format!("{}", u.cache_tokens)),
+                    Cell::new(u.turns.to_string()),
+                    Cell::new(format!("${:.2}", u.cost_usd)),
+                ]);
+            }
+            println!("account: {}", account_id);
+            println!(
+                "anchor:  {} ({})",
+                iso_from_ms(anchor),
+                weekly::DEFAULT_ANCHOR_ISO
+            );
+            println!("{table}");
+        }
+    }
+    Ok(())
 }
 
 /// Команда: показать 5-часовые rate-limit блоки.

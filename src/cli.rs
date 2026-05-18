@@ -289,6 +289,27 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Недельный rate-limit usage per account (% от ceiling плана).
+    ///
+    /// По умолчанию — текущее окно для текущего аккаунта.
+    Limits {
+        /// Фильтр по account_id (по умолчанию — текущий из credentials).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Какое окно: "current" (default), число (W0/W1/...) или "all" (последние N).
+        #[arg(long, default_value = "current")]
+        week: String,
+
+        /// Сколько окон при --week=all (default 5).
+        #[arg(short, long, default_value = "5")]
+        limit: usize,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// 5-часовые rate-limit блоки (Anthropic Claude Code).
     ///
     /// По умолчанию показывает последние N блоков. С --active — только текущий.
