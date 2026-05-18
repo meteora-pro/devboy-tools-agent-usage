@@ -26,6 +26,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 use std::time::SystemTime;
 
+use crate::account::detection::{self, AccountInfo};
 use crate::claude::parser::{discover_jsonl_files, JsonlFileInfo};
 use crate::claude::tokens;
 
@@ -69,13 +70,25 @@ struct FileWatermark {
 }
 
 /// Главный entrypoint: проиндексировать всё в `claude_projects_dir`.
+///
+/// Если текущий аккаунт определяется (через ENV или credentials.json), он
+/// записывается в `accounts` и проставляется новым turn'ам. Иначе turns
+/// сохраняются с `account_id = NULL` — заполнится позже через `accounts assign`.
 pub fn index_all(conn: &mut Connection, claude_projects_dir: &Path) -> Result<IndexStats> {
     let mut stats = IndexStats::default();
     let files = discover_jsonl_files(claude_projects_dir).context("discover JSONL")?;
     stats.files_scanned = files.len();
 
+    let current_account = detection::detect_current();
+    if let Some(info) = &current_account {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if let Err(e) = detection::upsert_account(conn, info, now_ms) {
+            eprintln!("Warning: не удалось записать account {} ({})", info.id, e);
+        }
+    }
+
     for file_info in files {
-        if let Err(e) = index_one_file(conn, &file_info, &mut stats) {
+        if let Err(e) = index_one_file(conn, &file_info, current_account.as_ref(), &mut stats) {
             stats.files_errored += 1;
             eprintln!("Warning: пропускаем {} ({})", file_info.path.display(), e);
         }
@@ -87,6 +100,7 @@ pub fn index_all(conn: &mut Connection, claude_projects_dir: &Path) -> Result<In
 fn index_one_file(
     conn: &mut Connection,
     file_info: &JsonlFileInfo,
+    current_account: Option<&AccountInfo>,
     stats: &mut IndexStats,
 ) -> Result<()> {
     let path = &file_info.path;
@@ -188,15 +202,16 @@ fn index_one_file(
             Ok(Some(rec)) => {
                 tx.execute(
                     "INSERT INTO turns
-                     (session_id, project, ts_ms, model,
+                     (session_id, project, ts_ms, model, account_id,
                       tokens_input, tokens_output, tokens_cache_create, tokens_cache_read,
                       cost_usd)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         rec.session_id,
                         project,
                         rec.ts_ms,
                         rec.model,
+                        current_account.map(|a| a.id.as_str()),
                         rec.input as i64,
                         rec.output as i64,
                         rec.cache_create as i64,

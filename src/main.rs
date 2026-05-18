@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod account;
 mod activity;
 mod classification;
 mod claude;
