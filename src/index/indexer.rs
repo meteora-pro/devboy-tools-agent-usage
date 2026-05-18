@@ -27,6 +27,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::account::detection::{self, AccountInfo};
+use crate::account::switching;
 use crate::claude::parser::{discover_jsonl_files, JsonlFileInfo};
 use crate::claude::tokens;
 
@@ -82,6 +83,20 @@ pub fn index_all(conn: &mut Connection, claude_projects_dir: &Path) -> Result<In
     let current_account = detection::detect_current();
     if let Some(info) = &current_account {
         let now_ms = chrono::Utc::now().timestamp_millis();
+        // Detect switching ДО upsert — иначе у нас в `accounts` уже будет current_id
+        // и `previous != current` запрос даст пустой ответ.
+        match switching::detect_and_record(conn, info, now_ms) {
+            Ok(Some(ev)) => {
+                eprintln!(
+                    "[index] account switch: {} → {} ({})",
+                    ev.previous_account.as_deref().unwrap_or("(none)"),
+                    ev.current_account,
+                    ev.confidence.as_str(),
+                );
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("Warning: switch detection failed ({})", e),
+        }
         if let Err(e) = detection::upsert_account(conn, info, now_ms) {
             eprintln!("Warning: не удалось записать account {} ({})", info.id, e);
         }

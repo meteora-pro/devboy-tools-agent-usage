@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -72,6 +72,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     if current < 1 {
         apply_v1(conn)?;
     }
+    if current < 2 {
+        apply_v2(conn)?;
+    }
 
     Ok(())
 }
@@ -129,6 +132,33 @@ CREATE INDEX IF NOT EXISTS idx_turns_session     ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_account_ts  ON turns(account_id, ts_ms);
 "#;
 
+/// Миграция v2 — таблица `account_switches` для истории переключения аккаунтов.
+///
+/// Заполняется индексером: при каждом проходе сравниваем `detect_current()` с
+/// последней известной строкой в `accounts`; если account_id различается —
+/// фиксируем switch event.
+fn apply_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V2)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (2, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS account_switches (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms            INTEGER NOT NULL,           -- момент когда обнаружили switch
+    previous_account TEXT,                       -- NULL если первый detect когда-либо
+    current_account  TEXT    NOT NULL,
+    confidence       TEXT    NOT NULL DEFAULT 'medium',  -- low | medium | high
+    detected_at      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_switches_ts ON account_switches(ts_ms);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,7 +183,13 @@ mod tests {
             .filter_map(Result::ok)
             .collect();
 
-        for required in ["accounts", "parsed_files", "schema_versions", "turns"] {
+        for required in [
+            "account_switches",
+            "accounts",
+            "parsed_files",
+            "schema_versions",
+            "turns",
+        ] {
             assert!(
                 tables.contains(&required.to_string()),
                 "таблица {} должна существовать, актуальные: {:?}",

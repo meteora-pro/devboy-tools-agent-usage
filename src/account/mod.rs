@@ -10,3 +10,4 @@
 
 pub mod detection;
 pub mod plan;
+pub mod switching;
