@@ -289,6 +289,20 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Обновить SQLite-индекс по JSONL логам (incremental).
+    ///
+    /// При первом запуске парсит весь ~/.claude/projects/ (cold ≈ 30-60 сек на 2 GB).
+    /// Последующие запуски обрабатывают только новые/изменённые файлы (warm ≈ <500 ms).
+    Index {
+        /// Полная переиндексация: очистить parsed_files и turns, парсить всё заново.
+        #[arg(long)]
+        full: bool,
+
+        /// Тихий режим — только финальная сводка на одной строке (для cron / tmux wrapper).
+        #[arg(long, short)]
+        quiet: bool,
+    },
+
     /// Установить skill для AI-агентов (Claude Code, Cursor, Windsurf, Cline, Copilot)
     Install {
         /// Установить глобально (только для Claude Code)

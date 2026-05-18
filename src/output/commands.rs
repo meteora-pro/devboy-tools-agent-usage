@@ -14,6 +14,7 @@ use crate::cli::{Agent, GroupBy, OutputFormat, TaskSortBy};
 use crate::config::Config;
 use crate::correlation::engine;
 use crate::correlation::tasks;
+use crate::index::{indexer, schema};
 use crate::output::{json, table, timeline};
 
 /// Загрузить и построить сессии с прогресс-баром
@@ -933,6 +934,79 @@ fn agent_label(agent: &Agent) -> &'static str {
         Agent::Cline => "cline",
         Agent::Copilot => "copilot",
     }
+}
+
+/// Команда: обновить SQLite-индекс по JSONL логам.
+///
+/// При `full=true` очищаем `parsed_files` и `turns` — следующая итерация будет
+/// холодным проходом. Иначе использует watermark из `parsed_files`.
+pub fn index_cmd(config: &Config, full: bool, quiet: bool) -> Result<()> {
+    let started = std::time::Instant::now();
+
+    let mut conn = schema::open_index()?;
+
+    if full {
+        if !quiet {
+            eprintln!("[index] --full: очистка parsed_files и turns");
+        }
+        conn.execute("DELETE FROM turns", [])?;
+        conn.execute("DELETE FROM parsed_files", [])?;
+    }
+
+    if !quiet {
+        eprintln!(
+            "[index] директория: {}",
+            config.claude_projects_dir.display()
+        );
+    }
+
+    let stats = indexer::index_all(&mut conn, &config.claude_projects_dir)?;
+    let elapsed = started.elapsed();
+
+    if quiet {
+        // Одна строка для cron / cc-stat.sh
+        println!(
+            "{} elapsed={:.2}s db={}",
+            stats.summary(),
+            elapsed.as_secs_f64(),
+            schema::index_db_path()?.display(),
+        );
+    } else {
+        eprintln!("[index] готово за {:.2}s", elapsed.as_secs_f64());
+        eprintln!("[index] {}", stats.summary());
+
+        // Краткая аналитика — какой объём набрался
+        let total_turns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))
+            .unwrap_or(0);
+        let total_cost: f64 = conn
+            .query_row("SELECT COALESCE(SUM(cost_usd), 0) FROM turns", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0.0);
+        let total_tokens_in: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(tokens_input), 0) FROM turns",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let total_tokens_out: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(tokens_output), 0) FROM turns",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        eprintln!(
+            "[index] в индексе: turns={} input={} output={} cost=${:.2}",
+            total_turns, total_tokens_in, total_tokens_out, total_cost,
+        );
+        eprintln!("[index] db: {}", schema::index_db_path()?.display());
+    }
+
+    Ok(())
 }
 
 /// Команда: установить skill для AI-агентов

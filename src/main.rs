@@ -203,6 +203,9 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Index { full, quiet } => {
+            output::commands::index_cmd(&config, full, quiet)?;
+        }
         Commands::Install {
             global,
             force,
