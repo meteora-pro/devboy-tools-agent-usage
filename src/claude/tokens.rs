@@ -38,13 +38,29 @@ fn get_pricing(model: &str) -> ModelPricing {
 
 /// Рассчитать стоимость запроса
 pub fn calculate_cost(usage: &TokenUsage, model: &str) -> f64 {
-    let pricing = get_pricing(model);
-    let input_cost = usage.input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
-    let output_cost = usage.output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
-    let cache_write_cost =
-        usage.cache_creation_input_tokens as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
-    let cache_read_cost =
-        usage.cache_read_input_tokens as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
+    calculate_cost_from_parts(
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens,
+        model,
+    )
+}
+
+/// Рассчитать стоимость из raw token counts. Используется индексером,
+/// который парсит JSONL без построения типизированной структуры TokenUsage.
+pub fn calculate_cost_from_parts(
+    input: u64,
+    output: u64,
+    cache_create: u64,
+    cache_read: u64,
+    model: &str,
+) -> f64 {
+    let p = get_pricing(model);
+    let input_cost = input as f64 * p.input_per_mtok / 1_000_000.0;
+    let output_cost = output as f64 * p.output_per_mtok / 1_000_000.0;
+    let cache_write_cost = cache_create as f64 * p.cache_write_per_mtok / 1_000_000.0;
+    let cache_read_cost = cache_read as f64 * p.cache_read_per_mtok / 1_000_000.0;
     input_cost + output_cost + cache_write_cost + cache_read_cost
 }
 

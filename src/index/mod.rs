@@ -9,4 +9,5 @@
 //! - `schema` — DDL и миграции
 //! - `indexer` — инкрементальное обновление (добавляется в L1.T2)
 
+pub mod indexer;
 pub mod schema;
