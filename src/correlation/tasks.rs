@@ -96,12 +96,16 @@ fn task_key_for_turn(
     (key, TaskGroupSource::Session, description)
 }
 
-/// Processing time одного turn (assistant_ts - user_ts)
+/// Максимально допустимое время обработки одного turn (4 часа).
+/// Turn длиннее этого — признак прерванной/перемещённой сессии.
+const MAX_TURN_AGENT_SECS: f64 = 4.0 * 3600.0;
+
+/// Processing time одного turn (assistant_ts - user_ts), кэпированное сверху.
 pub fn compute_turn_agent_time(user_ts: DateTime<Utc>, assistant_ts: Option<DateTime<Utc>>) -> f64 {
     match assistant_ts {
         Some(at) => {
             let ms = (at - user_ts).num_milliseconds() as f64 / 1000.0;
-            ms.max(0.0)
+            ms.max(0.0).min(MAX_TURN_AGENT_SECS)
         }
         None => 0.0,
     }
@@ -873,6 +877,8 @@ mod tests {
                 turn_duration_ms: None,
                 tool_calls: vec![],
                 tool_call_details: vec![],
+                mcp_calls: vec![],
+                tool_results: vec![],
                 usage: Some(TokenUsage {
                     input_tokens: 100_000,
                     output_tokens: 1_000,
