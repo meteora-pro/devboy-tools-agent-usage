@@ -22,17 +22,16 @@ impl PipelineInvocation {
 
     /// Максимальный номер запрошенного чанка (1 если не было явного chunk параметра)
     pub fn max_chunk(&self) -> u64 {
-        self.calls
-            .iter()
-            .filter_map(|c| c.chunk)
-            .max()
-            .unwrap_or(1)
+        self.calls.iter().filter_map(|c| c.chunk).max().unwrap_or(1)
     }
 
     /// Сколько всего чанков было запрошено
     pub fn total_chunks(&self) -> usize {
         // Уникальные chunk-номера + 1 за начальный вызов без chunk
-        let has_initial = self.calls.iter().any(|c| c.chunk.is_none() || c.chunk == Some(1));
+        let has_initial = self
+            .calls
+            .iter()
+            .any(|c| c.chunk.is_none() || c.chunk == Some(1));
         let follow_ups: std::collections::HashSet<u64> = self
             .calls
             .iter()

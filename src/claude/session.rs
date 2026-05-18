@@ -792,9 +792,8 @@ fn parse_item_counts(content: &str) -> (Option<usize>, Option<usize>) {
     // 1. "Showing N-M of TOTAL" — формат get_meeting_transcript и аналогичных
     //    Пример: "Showing 1-300 of 676 | ←0 before | 376 after→"
     static SHOWING_RE: OnceLock<Regex> = OnceLock::new();
-    let showing_re = SHOWING_RE.get_or_init(|| {
-        Regex::new(r"Showing\s+\d+-(\d+)\s+of\s+(\d+)").unwrap()
-    });
+    let showing_re =
+        SHOWING_RE.get_or_init(|| Regex::new(r"Showing\s+\d+-(\d+)\s+of\s+(\d+)").unwrap());
     if let Some(cap) = showing_re.captures(content) {
         let shown: usize = cap[1].parse().unwrap_or(0);
         let total: usize = cap[2].parse().unwrap_or(0);
@@ -805,9 +804,7 @@ fn parse_item_counts(content: &str) -> (Option<usize>, Option<usize>) {
 
     // 2. "[chunks] N/M" — формат devboy chunk pagination
     static CHUNKS_RE: OnceLock<Regex> = OnceLock::new();
-    let chunks_re = CHUNKS_RE.get_or_init(|| {
-        Regex::new(r"\[chunks\]\s+(\d+)/(\d+)").unwrap()
-    });
+    let chunks_re = CHUNKS_RE.get_or_init(|| Regex::new(r"\[chunks\]\s+(\d+)/(\d+)").unwrap());
     if let Some(cap) = chunks_re.captures(content) {
         let shown: usize = cap[1].parse().unwrap_or(0);
         let total: usize = cap[2].parse().unwrap_or(0);
@@ -819,9 +816,8 @@ fn parse_item_counts(content: &str) -> (Option<usize>, Option<usize>) {
     // 3. Markdown table — строки вида "| gitlab#123 |" или "| gh#456 |"
     //    Формат get_issues, get_merge_requests, get_epics и т.д.
     static TABLE_ITEM_RE: OnceLock<Regex> = OnceLock::new();
-    let table_re = TABLE_ITEM_RE.get_or_init(|| {
-        Regex::new(r"(?m)^\|\s+(?:[a-zA-Z_-]*#\d+|!\d+)\s+\|").unwrap()
-    });
+    let table_re = TABLE_ITEM_RE
+        .get_or_init(|| Regex::new(r"(?m)^\|\s+(?:[a-zA-Z_-]*#\d+|!\d+)\s+\|").unwrap());
     let count = table_re.find_iter(content).count();
     if count > 0 {
         return (Some(count), None); // пагинации нет — всё влезло
@@ -829,9 +825,8 @@ fn parse_item_counts(content: &str) -> (Option<usize>, Option<usize>) {
 
     // 4. TOON-заголовки: строки вида "gitlab#123 Title" или "#123 Title"
     static TOON_ITEM_RE: OnceLock<Regex> = OnceLock::new();
-    let toon_re = TOON_ITEM_RE.get_or_init(|| {
-        Regex::new(r"(?m)^(?:[a-zA-Z_-]*#\d+|!\d+)\s+\S").unwrap()
-    });
+    let toon_re =
+        TOON_ITEM_RE.get_or_init(|| Regex::new(r"(?m)^(?:[a-zA-Z_-]*#\d+|!\d+)\s+\S").unwrap());
     let count = toon_re.find_iter(content).count();
     if count > 0 {
         return (Some(count), None);

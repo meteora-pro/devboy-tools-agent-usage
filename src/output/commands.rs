@@ -1077,7 +1077,9 @@ pub fn mcp_patterns(
     );
 
     if report.total_invocations == 0 {
-        println!("Pipeline инструменты (get_issues, get_merge_requests и т.д.) не найдены в логах.");
+        println!(
+            "Pipeline инструменты (get_issues, get_merge_requests и т.д.) не найдены в логах."
+        );
         println!("Убедитесь, что devboy MCP сервер используется в сессиях.");
         return Ok(());
     }
@@ -1101,7 +1103,9 @@ pub fn mcp_patterns(
                 inv.calls.len(),
             );
             for call in &inv.calls {
-                let chunk_str = call.chunk.map_or("base".to_string(), |c| format!("chunk={}", c));
+                let chunk_str = call
+                    .chunk
+                    .map_or("base".to_string(), |c| format!("chunk={}", c));
                 let key_str = call.item_key.as_deref().unwrap_or("");
                 println!("    {} {}", chunk_str, key_str);
             }
@@ -1112,7 +1116,7 @@ pub fn mcp_patterns(
 }
 
 fn print_mcp_patterns_table(stats: &[mcp_patterns::ToolBehaviorStats]) {
-    use comfy_table::{Cell, Color, Table, presets};
+    use comfy_table::{presets, Cell, Color, Table};
     let mut table = Table::new();
     table.load_preset(presets::UTF8_BORDERS_ONLY);
     table.set_header(vec![
@@ -1196,18 +1200,11 @@ fn enrichment_tools_for(primary_tool: &str) -> &'static [&'static str] {
             "get_issue_relations",
             "get_epics",
         ],
-        "get_merge_requests" | "search_merge_requests" => &[
-            "get_merge_request_discussions",
-            "get_merge_request_diffs",
-        ],
-        "get_merge_request_diffs" => &[
-            "get_merge_request_discussions",
-            "get_issue_comments",
-        ],
-        "get_merge_request_discussions" => &[
-            "get_merge_request_diffs",
-            "get_issue_comments",
-        ],
+        "get_merge_requests" | "search_merge_requests" => {
+            &["get_merge_request_discussions", "get_merge_request_diffs"]
+        }
+        "get_merge_request_diffs" => &["get_merge_request_discussions", "get_issue_comments"],
+        "get_merge_request_discussions" => &["get_merge_request_diffs", "get_issue_comments"],
         "get_meeting_notes" | "search_meeting_notes" => &[
             "get_meeting_transcript",
             "search_meeting_notes",
@@ -1286,8 +1283,13 @@ pub fn context_enrichment(
     }
 
     if points.is_empty() {
-        println!("Нет данных для инструмента '{}' с известным количеством айтемов.", tool_filter);
-        println!("Убедитесь, что ответы содержат TOON-заголовки (#number title) или [chunks] маркер.");
+        println!(
+            "Нет данных для инструмента '{}' с известным количеством айтемов.",
+            tool_filter
+        );
+        println!(
+            "Убедитесь, что ответы содержат TOON-заголовки (#number title) или [chunks] маркер."
+        );
         return Ok(());
     }
 
@@ -1300,11 +1302,11 @@ pub fn context_enrichment(
     // Группируем по бакетам chars_per_item
     // Бакеты: tiny (<200), small (200-500), medium (500-1500), large (1500-4000), huge (>4000)
     let buckets: &[(&str, f64, f64)] = &[
-        ("tiny  <200",    0.0,    200.0),
-        ("small 200-500", 200.0,  500.0),
-        ("med   500-1.5k",500.0,  1500.0),
+        ("tiny  <200", 0.0, 200.0),
+        ("small 200-500", 200.0, 500.0),
+        ("med   500-1.5k", 500.0, 1500.0),
         ("large 1.5k-4k", 1500.0, 4000.0),
-        ("huge  >4k",     4000.0, f64::MAX),
+        ("huge  >4k", 4000.0, f64::MAX),
     ];
 
     let enrichment_tools = enrichment_tools_for(tool_filter);
@@ -1326,7 +1328,7 @@ fn print_enrichment_table(
     tool_filter: &str,
     _enrichment_tools: &[&str],
 ) {
-    use comfy_table::{Cell, Color, Table, presets};
+    use comfy_table::{presets, Cell, Color, Table};
 
     let mut table = Table::new();
     table.load_preset(presets::UTF8_BORDERS_ONLY);
@@ -1351,7 +1353,8 @@ fn print_enrichment_table(
         let mean_cpi = bp.iter().map(|p| p.chars_per_item).sum::<f64>() / n as f64;
         let mean_enr = bp.iter().map(|p| p.enrichment_count as f64).sum::<f64>() / n as f64;
         let mean_fup = bp.iter().map(|p| p.total_followups as f64).sum::<f64>() / n as f64;
-        let pct_enr = bp.iter().filter(|p| p.enrichment_count > 0).count() as f64 / n as f64 * 100.0;
+        let pct_enr =
+            bp.iter().filter(|p| p.enrichment_count > 0).count() as f64 / n as f64 * 100.0;
 
         // Цвет: чем больше enrichment при малом контексте — тем желтее
         let enr_color = if lo < 500.0 && mean_enr > 1.5 {
@@ -1372,7 +1375,10 @@ fn print_enrichment_table(
         ]);
     }
     println!("{table}");
-    println!("\nE[enrichment] — среднее число enrichment tool calls ({}) в том же turn'е", tool_filter);
+    println!(
+        "\nE[enrichment] — среднее число enrichment tool calls ({}) в том же turn'е",
+        tool_filter
+    );
     println!("Гипотеза: чем меньше chars/item → тем больше E[enrichment]");
     println!();
 }
@@ -1384,14 +1390,29 @@ fn print_enrichment_correlation(points: &[EnrichmentPoint], enrichment_tools: &[
         return;
     }
     let mean_x = points.iter().map(|p| p.chars_per_item).sum::<f64>() / n;
-    let mean_y = points.iter().map(|p| p.enrichment_count as f64).sum::<f64>() / n;
+    let mean_y = points
+        .iter()
+        .map(|p| p.enrichment_count as f64)
+        .sum::<f64>()
+        / n;
 
     let cov: f64 = points
         .iter()
         .map(|p| (p.chars_per_item - mean_x) * (p.enrichment_count as f64 - mean_y))
-        .sum::<f64>() / n;
-    let std_x = (points.iter().map(|p| (p.chars_per_item - mean_x).powi(2)).sum::<f64>() / n).sqrt();
-    let std_y = (points.iter().map(|p| (p.enrichment_count as f64 - mean_y).powi(2)).sum::<f64>() / n).sqrt();
+        .sum::<f64>()
+        / n;
+    let std_x = (points
+        .iter()
+        .map(|p| (p.chars_per_item - mean_x).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let std_y = (points
+        .iter()
+        .map(|p| (p.enrichment_count as f64 - mean_y).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt();
 
     if std_x > 0.0 && std_y > 0.0 {
         let r = cov / (std_x * std_y);
@@ -1402,11 +1423,15 @@ fn print_enrichment_correlation(points: &[EnrichmentPoint], enrichment_tools: &[
         } else {
             "~ корреляция слабая"
         };
-        println!("Pearson r(chars_per_item, enrichment_count) = {:.3}  {}", r, interpretation);
+        println!(
+            "Pearson r(chars_per_item, enrichment_count) = {:.3}  {}",
+            r, interpretation
+        );
     }
 
     // Топ enrichment инструментов по всем точкам
-    let mut tool_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut tool_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for p in points {
         for name in &p.followup_names {
             if enrichment_tools.contains(&name.as_str()) {
@@ -1437,7 +1462,9 @@ fn print_enrichment_json(points: &[EnrichmentPoint], buckets: &[(&str, f64, f64)
             let n = bp.len();
             let mean_enr = if n > 0 {
                 bp.iter().map(|p| p.enrichment_count as f64).sum::<f64>() / n as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             json!({ "bucket": label, "count": n, "mean_enrichment": mean_enr })
         })
         .collect();
@@ -1447,7 +1474,10 @@ fn print_enrichment_json(points: &[EnrichmentPoint], buckets: &[(&str, f64, f64)
 fn print_enrichment_csv(points: &[EnrichmentPoint]) {
     println!("chars_per_item,items_shown,content_chars,enrichment_count,total_followups");
     for p in points {
-        println!("{:.1},{},{},{},{}", p.chars_per_item, p.items_shown, p.content_chars, p.enrichment_count, p.total_followups);
+        println!(
+            "{:.1},{},{},{},{}",
+            p.chars_per_item, p.items_shown, p.content_chars, p.enrichment_count, p.total_followups
+        );
     }
 }
 
@@ -1645,7 +1675,7 @@ fn print_tool_behavior_table(
     large_next_turn: &HashMap<String, HashMap<String, usize>>,
     threshold: usize,
 ) {
-    use comfy_table::{Cell, Color, Table, presets};
+    use comfy_table::{presets, Cell, Color, Table};
 
     for tool_name in tools {
         let lc = large_count.get(tool_name).copied().unwrap_or(0);
@@ -1657,11 +1687,7 @@ fn print_tool_behavior_table(
 
         println!(
             "━━━ {} ━━━  total: {}  large (>{} ch): {}  small: {}",
-            tool_name,
-            total,
-            threshold,
-            lc,
-            sc,
+            tool_name, total, threshold, lc, sc,
         );
 
         // Таблица follow-ups в том же turn'е
@@ -1677,7 +1703,8 @@ fn print_tool_behavior_table(
             ]);
 
             // Все уникальные follow-up tools
-            let mut all_followup: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut all_followup: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             if let Some(m) = large_followups.get(tool_name) {
                 all_followup.extend(m.keys().cloned());
             }
@@ -1686,8 +1713,16 @@ fn print_tool_behavior_table(
             }
             let mut all_followup: Vec<String> = all_followup.into_iter().collect();
             all_followup.sort_by_key(|k| {
-                let l = large_followups.get(tool_name).and_then(|m| m.get(k)).copied().unwrap_or(0);
-                let s = small_followups.get(tool_name).and_then(|m| m.get(k)).copied().unwrap_or(0);
+                let l = large_followups
+                    .get(tool_name)
+                    .and_then(|m| m.get(k))
+                    .copied()
+                    .unwrap_or(0);
+                let s = small_followups
+                    .get(tool_name)
+                    .and_then(|m| m.get(k))
+                    .copied()
+                    .unwrap_or(0);
                 std::cmp::Reverse(l + s)
             });
 
@@ -1708,7 +1743,7 @@ fn print_tool_behavior_table(
                 let diff_color = if l_pct > s_pct + 10 {
                     Color::Yellow // чаще при большом ответе
                 } else if s_pct > l_pct + 10 {
-                    Color::Cyan  // чаще при маленьком ответе
+                    Color::Cyan // чаще при маленьком ответе
                 } else {
                     Color::Reset
                 };
@@ -1902,13 +1937,20 @@ struct ToolResponseToolStats {
 }
 
 fn print_tool_response_stats_table(stats: &[ToolResponseToolStats]) {
-    use comfy_table::{Cell, Color, Table, presets};
+    use comfy_table::{presets, Cell, Color, Table};
 
     // Таблица 1: размеры
     let mut table = Table::new();
     table.load_preset(presets::UTF8_BORDERS_ONLY);
     table.set_header(vec![
-        "Инструмент", "Вызовов", "Median", "P75", "P90", "P99", "Max", "~tokens(P90)",
+        "Инструмент",
+        "Вызовов",
+        "Median",
+        "P75",
+        "P90",
+        "P99",
+        "Max",
+        "~tokens(P90)",
     ]);
     for s in stats {
         table.add_row(vec![
