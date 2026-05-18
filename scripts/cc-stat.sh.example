@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Tmux statusline wrapper для Claude Code usage (devboy-tools-agent-usage).
+#
+# Двухуровневый кеш:
+#   /tmp/cc-stat-output.cache  — финальный tmux output (TTL 5 sec)
+#   /tmp/cc-stat-index.lock    — timestamp последнего index (TTL 30 sec)
+#
+# tmux дёргает этот скрипт каждые status-interval секунд → 99% — cat файла <1 ms.
+# Index работает в фоне, не блокирует tmux.
+
+set -e
+
+BIN="${AGENT_USAGE_BIN:-$HOME/.local/bin/agent-usage}"
+OUTPUT_CACHE="/tmp/cc-stat-output-$USER.cache"
+INDEX_LOCK="/tmp/cc-stat-index-$USER.lock"
+OUTPUT_TTL=5     # секунд: насколько часто статус-бар реально обновляется
+INDEX_TTL=30     # секунд: насколько часто пересканируем JSONL на новые turns
+
+# 1. Если output cache свежий — вернуть его и выйти.
+if [ -f "$OUTPUT_CACHE" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$OUTPUT_CACHE") ))
+    if [ "$age" -lt "$OUTPUT_TTL" ]; then
+        cat "$OUTPUT_CACHE"
+        exit 0
+    fi
+fi
+
+# 2. Проверяем нужен ли refresh индекса.
+need_index=1
+if [ -f "$INDEX_LOCK" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$INDEX_LOCK") ))
+    [ "$age" -lt "$INDEX_TTL" ] && need_index=0
+fi
+
+# 3. Index в фоне (не блокируем tmux refresh).
+if [ "$need_index" = "1" ] && [ -x "$BIN" ]; then
+    touch "$INDEX_LOCK"
+    ( "$BIN" index --quiet >/dev/null 2>&1 ) &
+fi
+
+# 4. Получить statusline. Если бинарь недоступен — placeholder.
+if [ ! -x "$BIN" ]; then
+    output="⏸ cc-stat unavailable"
+else
+    output=$("$BIN" statusline -f tmux 2>/dev/null || echo "⏸ cc-err")
+fi
+
+# 5. Записать в output cache и вернуть.
+printf "%s" "$output" > "$OUTPUT_CACHE"
+printf "%s" "$output"
