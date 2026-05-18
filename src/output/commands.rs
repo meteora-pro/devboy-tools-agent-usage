@@ -7,6 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::activity::db;
 use crate::activity::transform;
+use crate::blocks::engine::{self as blocks, Block, BlockFilter};
 use crate::claude::mcp_patterns;
 use crate::claude::parser;
 use crate::claude::session::{self, AggregatedUsage, ClaudeSession};
@@ -934,6 +935,109 @@ fn agent_label(agent: &Agent) -> &'static str {
         Agent::Cline => "cline",
         Agent::Copilot => "copilot",
     }
+}
+
+/// Команда: показать 5-часовые rate-limit блоки.
+pub fn blocks_cmd(
+    active_only: bool,
+    account: Option<&str>,
+    limit: usize,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+    let filter = BlockFilter {
+        account_id: account,
+        ..Default::default()
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut all = blocks::build_blocks_at(&conn, &filter, now_ms)?;
+
+    let to_show: Vec<Block> = if active_only {
+        all.into_iter().filter(|b| b.is_active).collect()
+    } else {
+        if all.len() > limit {
+            all.drain(..all.len() - limit);
+        }
+        all
+    };
+
+    match format {
+        OutputFormat::Json => {
+            let v = serde_json::json!({
+                "now_ms": now_ms,
+                "blocks": to_show,
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        OutputFormat::Csv => {
+            println!("start_iso,end_iso,is_active,turns,input,output,cache_create,cache_read,cost_usd,burn_rate_tpm,account");
+            for b in &to_show {
+                println!(
+                    "{},{},{},{},{},{},{},{},{:.4},{},{}",
+                    iso_from_ms(b.start_ms),
+                    iso_from_ms(b.end_ms),
+                    b.is_active,
+                    b.turns,
+                    b.tokens_input,
+                    b.tokens_output,
+                    b.tokens_cache_create,
+                    b.tokens_cache_read,
+                    b.cost_usd,
+                    b.burn_rate_tpm
+                        .map(|x| format!("{:.1}", x))
+                        .unwrap_or_default(),
+                    b.account_id.as_deref().unwrap_or(""),
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                "start",
+                "end",
+                "state",
+                "turns",
+                "in+out",
+                "cache",
+                "burn(t/min)",
+                "cost",
+            ]);
+            for b in &to_show {
+                let state_cell = if b.is_active {
+                    Cell::new("ACTIVE").fg(Color::Green)
+                } else {
+                    Cell::new("closed").fg(Color::DarkGrey)
+                };
+                let burn = b
+                    .burn_rate_tpm
+                    .map(|x| format!("{:.0}", x))
+                    .unwrap_or_else(|| "—".into());
+                table.add_row(vec![
+                    Cell::new(iso_from_ms(b.start_ms)),
+                    Cell::new(iso_from_ms(b.end_ms)),
+                    state_cell,
+                    Cell::new(b.turns.to_string()),
+                    Cell::new(format!("{}", b.tokens_input + b.tokens_output)),
+                    Cell::new(format!("{}", b.tokens_cache_create + b.tokens_cache_read)),
+                    Cell::new(burn),
+                    Cell::new(format!("${:.2}", b.cost_usd)),
+                ]);
+            }
+            println!("{table}");
+            if to_show.is_empty() {
+                println!("(нет блоков — запустите `index` или проверьте фильтр)");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn iso_from_ms(ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ms)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| ms.to_string())
 }
 
 /// Команда: обновить SQLite-индекс по JSONL логам.

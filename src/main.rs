@@ -207,6 +207,14 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Blocks {
+            active,
+            account,
+            limit,
+            format,
+        } => {
+            output::commands::blocks_cmd(active, account.as_deref(), limit, &format)?;
+        }
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

@@ -289,6 +289,27 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// 5-часовые rate-limit блоки (Anthropic Claude Code).
+    ///
+    /// По умолчанию показывает последние N блоков. С --active — только текущий.
+    Blocks {
+        /// Только активный блок (now < end_ms).
+        #[arg(long)]
+        active: bool,
+
+        /// Фильтр по account_id (как из таблицы accounts).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Сколько последних блоков показать (без --active).
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Обновить SQLite-индекс по JSONL логам (incremental).
     ///
     /// При первом запуске парсит весь ~/.claude/projects/ (cold ≈ 30-60 сек на 2 GB).
