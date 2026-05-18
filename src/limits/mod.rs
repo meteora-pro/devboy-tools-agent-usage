@@ -8,4 +8,5 @@
 //! anchor попадают в bucket `pre`. Materializing таблицу не нужно — id
 //! вычисляется на лету через SQL CASE для дешёвого GROUP BY.
 
+pub mod engine;
 pub mod weekly;
