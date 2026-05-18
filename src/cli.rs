@@ -289,6 +289,19 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Аккаунты Claude Code в индексе.
+    ///
+    /// По умолчанию list. `--switches` показывает историю переключений.
+    Accounts {
+        /// Показать историю переключений вместо списка аккаунтов.
+        #[arg(long)]
+        switches: bool,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Недельный rate-limit usage per account (% от ceiling плана).
     ///
     /// По умолчанию — текущее окно для текущего аккаунта.

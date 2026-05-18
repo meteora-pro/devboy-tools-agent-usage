@@ -223,6 +223,9 @@ fn main() -> Result<()> {
         } => {
             output::commands::limits_cmd(account.as_deref(), &week, limit, &format)?;
         }
+        Commands::Accounts { switches, format } => {
+            output::commands::accounts_cmd(switches, &format)?;
+        }
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

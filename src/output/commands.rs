@@ -940,6 +940,196 @@ fn agent_label(agent: &Agent) -> &'static str {
     }
 }
 
+/// Команда: показать аккаунты или историю переключений.
+pub fn accounts_cmd(switches: bool, format: &OutputFormat) -> Result<()> {
+    let conn = schema::open_index()?;
+    if switches {
+        accounts_switches(&conn, format)
+    } else {
+        accounts_list(&conn, format)
+    }
+}
+
+fn accounts_list(conn: &rusqlite::Connection, format: &OutputFormat) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.plan, a.first_seen_ms, a.last_seen_ms, a.notes,
+                COALESCE(t.cnt, 0), COALESCE(t.cost, 0.0)
+         FROM accounts a
+         LEFT JOIN (
+             SELECT account_id, COUNT(*) AS cnt, SUM(cost_usd) AS cost
+             FROM turns
+             WHERE account_id IS NOT NULL
+             GROUP BY account_id
+         ) t ON t.account_id = a.id
+         ORDER BY a.last_seen_ms DESC",
+    )?;
+    let rows: Vec<(
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+        i64,
+        f64,
+    )> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1).ok(),
+                r.get(2).ok(),
+                r.get(3).ok(),
+                r.get(4).ok(),
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    match format {
+        OutputFormat::Json => {
+            let json_rows: Vec<_> = rows
+                .iter()
+                .map(|(id, plan, first, last, notes, turns, cost)| {
+                    serde_json::json!({
+                        "id": id,
+                        "plan": plan,
+                        "first_seen_ms": first,
+                        "last_seen_ms": last,
+                        "notes": notes,
+                        "turns": turns,
+                        "cost_usd": cost,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json_rows)?);
+        }
+        OutputFormat::Csv => {
+            println!("id,plan,first_seen,last_seen,turns,cost_usd,notes");
+            for (id, plan, first, last, notes, turns, cost) in &rows {
+                println!(
+                    "{},{},{},{},{},{:.4},{}",
+                    id,
+                    plan.as_deref().unwrap_or(""),
+                    first.map(iso_from_ms).unwrap_or_default(),
+                    last.map(iso_from_ms).unwrap_or_default(),
+                    turns,
+                    cost,
+                    notes.as_deref().unwrap_or("").replace(',', ";"),
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                "id",
+                "plan",
+                "first_seen",
+                "last_seen",
+                "turns",
+                "cost",
+                "notes",
+            ]);
+            for (id, plan, first, last, notes, turns, cost) in &rows {
+                table.add_row(vec![
+                    Cell::new(id),
+                    Cell::new(plan.as_deref().unwrap_or("")),
+                    Cell::new(first.map(iso_from_ms).unwrap_or_default()),
+                    Cell::new(last.map(iso_from_ms).unwrap_or_default()),
+                    Cell::new(turns.to_string()),
+                    Cell::new(format!("${:.2}", cost)),
+                    Cell::new(notes.as_deref().unwrap_or("")),
+                ]);
+            }
+            let null_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM turns WHERE account_id IS NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            println!("{table}");
+            if null_count > 0 {
+                println!(
+                    "({} turns без account_id — это исторические, до first detection)",
+                    null_count,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn accounts_switches(conn: &rusqlite::Connection, format: &OutputFormat) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT ts_ms, previous_account, current_account, confidence, detected_at
+         FROM account_switches ORDER BY ts_ms ASC",
+    )?;
+    let rows: Vec<(i64, Option<String>, String, String, String)> = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1).ok(), r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    match format {
+        OutputFormat::Json => {
+            let json_rows: Vec<_> = rows
+                .iter()
+                .map(|(ts, prev, cur, conf, det)| {
+                    serde_json::json!({
+                        "ts_ms": ts,
+                        "previous_account": prev,
+                        "current_account": cur,
+                        "confidence": conf,
+                        "detected_at": det,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json_rows)?);
+        }
+        OutputFormat::Csv => {
+            println!("ts,previous_account,current_account,confidence,detected_at");
+            for (ts, prev, cur, conf, det) in &rows {
+                println!(
+                    "{},{},{},{},{}",
+                    iso_from_ms(*ts),
+                    prev.as_deref().unwrap_or(""),
+                    cur,
+                    conf,
+                    det
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec!["when", "from", "to", "confidence"]);
+            for (ts, prev, cur, conf, _) in &rows {
+                let conf_cell = match conf.as_str() {
+                    "high" => Cell::new(conf).fg(Color::Green),
+                    "medium" => Cell::new(conf).fg(Color::Yellow),
+                    _ => Cell::new(conf).fg(Color::DarkGrey),
+                };
+                table.add_row(vec![
+                    Cell::new(iso_from_ms(*ts)),
+                    Cell::new(prev.as_deref().unwrap_or("(none)")),
+                    Cell::new(cur),
+                    conf_cell,
+                ]);
+            }
+            println!("{table}");
+            if rows.is_empty() {
+                println!("(переключений ещё не было)");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Команда: weekly limits (% usage от ceiling плана).
 pub fn limits_cmd(
     account: Option<&str>,
