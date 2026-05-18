@@ -239,6 +239,9 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Statusline { account, format } => {
+            output::commands::statusline_cmd(account.as_deref(), &format)?;
+        }
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

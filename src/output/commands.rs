@@ -13,7 +13,7 @@ use crate::blocks::engine::{self as blocks, Block, BlockFilter};
 use crate::claude::mcp_patterns;
 use crate::claude::parser;
 use crate::claude::session::{self, AggregatedUsage, ClaudeSession};
-use crate::cli::{Agent, GroupBy, OutputFormat, TaskSortBy};
+use crate::cli::{Agent, GroupBy, OutputFormat, StatuslineFormat, TaskSortBy};
 use crate::config::Config;
 use crate::correlation::engine;
 use crate::correlation::tasks;
@@ -939,6 +939,165 @@ fn agent_label(agent: &Agent) -> &'static str {
         Agent::Cline => "cline",
         Agent::Copilot => "copilot",
     }
+}
+
+/// Команда: компактный statusline для tmux.
+///
+/// Объединяет 5h block burn + weekly % + plan в одну width-stable строку.
+/// При отсутствии данных (пустой индекс, нет активного блока) graceful
+/// degradation — placeholder'ы, чтобы tmux не "прыгал".
+pub fn statusline_cmd(account: Option<&str>, format: &StatuslineFormat) -> Result<()> {
+    let conn = match schema::open_index() {
+        Ok(c) => c,
+        Err(_) => {
+            // Индекс ещё не создан — печатаем placeholder без падения
+            print_placeholder(format);
+            return Ok(());
+        }
+    };
+    let now_ms = Utc::now().timestamp_millis();
+
+    let account_id: String = match account {
+        Some(a) => a.to_string(),
+        None => match detection::detect_current() {
+            Some(info) => info.id,
+            None => "(none)".to_string(),
+        },
+    };
+
+    // 5h блок
+    let block_filter = BlockFilter {
+        account_id: Some(&account_id),
+        ..Default::default()
+    };
+    let active = blocks::find_active(&conn, &block_filter, now_ms)
+        .ok()
+        .flatten();
+
+    // Weekly usage
+    let anchor = weekly::anchor_ms();
+    let win = weekly::current_window(anchor);
+    let weekly = limits_engine::usage_for(&conn, &account_id, win.clone()).ok();
+
+    // Plan
+    let plan: String = conn
+        .query_row(
+            "SELECT plan FROM accounts WHERE id = ?",
+            rusqlite::params![account_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".into());
+
+    match format {
+        StatuslineFormat::Json => {
+            let v = serde_json::json!({
+                "now_ms": now_ms,
+                "account_id": account_id,
+                "plan": plan,
+                "active_block": active,
+                "weekly": weekly,
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        StatuslineFormat::Raw => {
+            println!(
+                "{}",
+                render_oneline(&account_id, &plan, &active, &weekly, now_ms)
+            );
+        }
+        StatuslineFormat::Tmux => {
+            println!("{}", render_tmux(&active, &weekly, &plan, now_ms));
+        }
+    }
+    Ok(())
+}
+
+fn print_placeholder(format: &StatuslineFormat) {
+    match format {
+        StatuslineFormat::Json => println!("{{}}"),
+        StatuslineFormat::Raw => println!("(no index)"),
+        StatuslineFormat::Tmux => println!("⏸ no-idx"),
+    }
+}
+
+/// Width-stable строка для tmux. Формат:
+///   "EMOJI  $1257  ⏰2h28m  W:4.9%  Max20"
+/// где EMOJI = 🟢/🟡/🟠/🔴 в зависимости от burn rate.
+fn render_tmux(
+    active: &Option<Block>,
+    weekly: &Option<limits_engine::WeeklyUsage>,
+    plan: &str,
+    now_ms: i64,
+) -> String {
+    let (emoji, burn_str, cost_str, time_left) = match active {
+        Some(b) => {
+            let burn = b.burn_rate_tpm.unwrap_or(0.0);
+            let emoji = burn_emoji(burn);
+            let burn_str = format_burn(burn);
+            let cost_str = format!("${:>6.0}", b.cost_usd);
+            let remaining_ms = (b.end_ms - now_ms).max(0);
+            let h = remaining_ms / 3_600_000;
+            let m = (remaining_ms % 3_600_000) / 60_000;
+            let time = format!("⏰{}h{:02}m", h, m);
+            (emoji, burn_str, cost_str, time)
+        }
+        None => (
+            "⚪",
+            "  ---/m".to_string(),
+            "$  ---".to_string(),
+            "⏰--h--m".to_string(),
+        ),
+    };
+
+    let weekly_str = match weekly {
+        Some(u) => match u.percent {
+            Some(p) => format!("W:{:>5.1}%", p),
+            None => "W: ---".to_string(),
+        },
+        None => "W: ---".to_string(),
+    };
+
+    format!(
+        "{} {} {} {} {} {}",
+        emoji, burn_str, cost_str, time_left, weekly_str, plan
+    )
+}
+
+/// Burn rate emoji (визуальный индикатор нагрузки).
+fn burn_emoji(tpm: f64) -> &'static str {
+    if tpm < 1000.0 {
+        "🟢"
+    } else if tpm < 5000.0 {
+        "🟡"
+    } else if tpm < 15000.0 {
+        "🟠"
+    } else {
+        "🔴"
+    }
+}
+
+/// Format burn: "  9k/m", " 99k/m", "999k/m" — 6 символов всегда.
+fn format_burn(tpm: f64) -> String {
+    if tpm < 1000.0 {
+        format!("{:>4.0}/m", tpm)
+    } else if tpm < 1_000_000.0 {
+        format!("{:>4.0}k/m", tpm / 1000.0)
+    } else {
+        format!("{:>4.1}M/m", tpm / 1_000_000.0)
+    }
+}
+
+fn render_oneline(
+    account_id: &str,
+    plan: &str,
+    active: &Option<Block>,
+    weekly: &Option<limits_engine::WeeklyUsage>,
+    now_ms: i64,
+) -> String {
+    let tmux = render_tmux(active, weekly, plan, now_ms);
+    format!("[{}] {}", &account_id[..account_id.len().min(8)], tmux)
 }
 
 /// Команда: biome aquarium (🐋🦈🐬🐟🦐🦠).

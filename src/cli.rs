@@ -289,6 +289,23 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Компактная сводка для tmux status-bar (5h блок + weekly % + plan).
+    ///
+    /// Width-stable: при разной нагрузке ширина строки сохраняется.
+    /// Идеально подходит для интеграции в #[status-right].
+    Statusline {
+        /// Account override (по умолчанию — detect_current()).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Формат:
+        ///   tmux  — одна width-stable строка для status-bar
+        ///   raw   — человеко-читаемая одна строка
+        ///   json  — все поля для кастомного рендеринга
+        #[arg(short, long, default_value = "tmux")]
+        format: StatuslineFormat,
+    },
+
     /// Биом-классификация сессий (aquarium: 🐋🦈🐬🐟🦐🦠).
     Biome {
         /// Фильтр по account_id.
@@ -407,6 +424,13 @@ pub enum TaskSortBy {
     Time,
     Sessions,
     Recent,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum StatuslineFormat {
+    Tmux,
+    Raw,
+    Json,
 }
 
 #[derive(Clone, ValueEnum)]
