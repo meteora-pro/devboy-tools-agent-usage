@@ -226,6 +226,19 @@ fn main() -> Result<()> {
         Commands::Accounts { switches, format } => {
             output::commands::accounts_cmd(switches, &format)?;
         }
+        Commands::Biome {
+            account,
+            from,
+            to,
+            format,
+        } => {
+            output::commands::biome_cmd(
+                account.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                &format,
+            )?;
+        }
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

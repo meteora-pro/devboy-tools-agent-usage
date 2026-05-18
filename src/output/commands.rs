@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::account::detection;
 use crate::activity::db;
 use crate::activity::transform;
+use crate::biome::engine::{self as biome_engine, Biome, BiomeFilter};
 use crate::blocks::engine::{self as blocks, Block, BlockFilter};
 use crate::claude::mcp_patterns;
 use crate::claude::parser;
@@ -938,6 +939,82 @@ fn agent_label(agent: &Agent) -> &'static str {
         Agent::Cline => "cline",
         Agent::Copilot => "copilot",
     }
+}
+
+/// Команда: biome aquarium (🐋🦈🐬🐟🦐🦠).
+pub fn biome_cmd(
+    account: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+
+    let from_ms = from.and_then(parse_date_to_ms);
+    let to_ms = to.and_then(parse_date_to_ms);
+    let filter = BiomeFilter {
+        account_id: account,
+        from_ms,
+        to_ms,
+    };
+
+    let summary = biome_engine::summary(&conn, &filter)?;
+
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        OutputFormat::Csv => {
+            println!("biome,sessions");
+            for b in Biome::all() {
+                let n = summary.counts.get(b.name()).copied().unwrap_or(0);
+                println!("{},{}", b.name(), n);
+            }
+            println!("__total_sessions,{}", summary.total_sessions);
+            println!("__total_turns,{}", summary.total_turns);
+            println!("__total_cost,{:.4}", summary.total_cost_usd);
+        }
+        OutputFormat::Table => {
+            // Aquarium: per-biome bar (relative scale)
+            let max_n = Biome::all()
+                .iter()
+                .map(|b| summary.counts.get(b.name()).copied().unwrap_or(0))
+                .max()
+                .unwrap_or(0)
+                .max(1);
+
+            println!(
+                "Sessions: {}  Turns: {}  Cost: ${:.2}",
+                summary.total_sessions, summary.total_turns, summary.total_cost_usd,
+            );
+            println!();
+
+            for b in Biome::all() {
+                let n = summary.counts.get(b.name()).copied().unwrap_or(0);
+                let bar_len = if max_n == 0 {
+                    0
+                } else {
+                    ((n as f64 / max_n as f64) * 40.0).round() as usize
+                };
+                let bar = "█".repeat(bar_len);
+                println!("{} {:<9} {:>4} {}", b.emoji(), b.name(), n, bar,);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_date_to_ms(s: &str) -> Option<i64> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let d: u32 = parts[2].parse().ok()?;
+    chrono::NaiveDate::from_ymd_opt(y, m, d)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc().timestamp_millis())
 }
 
 /// Команда: показать аккаунты или историю переключений.

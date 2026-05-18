@@ -289,6 +289,25 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Биом-классификация сессий (aquarium: 🐋🦈🐬🐟🦐🦠).
+    Biome {
+        /// Фильтр по account_id.
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата (YYYY-MM-DD).
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Аккаунты Claude Code в индексе.
     ///
     /// По умолчанию list. `--switches` показывает историю переключений.
