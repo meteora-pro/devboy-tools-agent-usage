@@ -2,6 +2,7 @@
 
 mod account;
 mod activity;
+mod blocks;
 mod classification;
 mod claude;
 mod cli;
