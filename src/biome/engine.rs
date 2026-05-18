@@ -9,7 +9,9 @@
 //! - <3     Plankton  🦠
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;

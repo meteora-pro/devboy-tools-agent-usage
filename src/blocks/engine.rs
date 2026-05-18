@@ -10,7 +10,9 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::Connection;
 use serde::Serialize;
 
 /// Длина блока в миллисекундах (5 часов).

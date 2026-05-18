@@ -6,6 +6,14 @@ Reads JSONL logs from `~/.claude/projects/`, optionally correlates with [Activit
 
 ## Features
 
+- **Incremental SQLite index** — 2 GB of JSONL → 50 MB DB, cold ~10 sec, warm ~50 ms
+- **5h rate-limit blocks** — Anthropic-style sliding blocks with burn rate + projection
+- **Weekly limits** — % usage per account against plan ceiling (Pro/Max5/Max20)
+- **Account detection** — auto-discovered from `~/.claude/.credentials.json` (no JWT parsing,
+  no tokens stored — only SipHash of refresh token)
+- **Account switching** — heuristic detection of credential changes between indexer runs
+- **Biome classification** — aquarium view (🐋🦈🐬🐟🦐🦠) per session
+- **tmux statusline** — width-stable one-line summary for status-bar (`🟠 6k/m $81 ⏰4h55m W:5.1% Max20`)
 - **Cost** — token usage and USD breakdown by day/week/month with cache write/read
 - **Tasks** — auto-grouping by git branch (Jira ID, numeric ID) + LLM classification
 - **Tool categories** — tool call breakdown: Read/Write/Bash/MCP/DevBoy
@@ -183,6 +191,93 @@ Clears summarization cache for matching tasks. Then run `tasks --with-llm` to re
 devboy-tools-agent-usage cost [--project NAME] [--from DATE] [--to DATE] \
     [--group-by day|week|month|session] [-f FORMAT]
 ```
+
+### `index` — Incremental SQLite Index
+
+Builds and maintains a SQLite index over `~/.claude/projects/*.jsonl`. Cold parse runs once
+(~10s on 2 GB), subsequent runs only process new/changed files via mtime+offset watermark.
+
+```bash
+devboy-tools-agent-usage index [--full] [--quiet]
+```
+
+DB location: `~/.cache/devboy-tools-agent-usage/index.db` (~50 MB for 2 GB JSONL).
+
+Required by `blocks`, `limits`, `accounts`, `biome`, `statusline`.
+
+### `blocks` — 5-Hour Rate-Limit Blocks
+
+Shows 5h sliding rate-limit blocks (Anthropic semantics: block starts with first turn,
+ends 5h later). Active block highlights in green.
+
+```bash
+devboy-tools-agent-usage blocks [--active] [--account ID] [--limit N] [-f FORMAT]
+```
+
+### `limits` — Weekly Usage Percentage
+
+Per-account weekly usage with plan ceiling. Color-coded: green <70%, yellow 70-90%, red ≥90%.
+
+```bash
+devboy-tools-agent-usage limits [--account ID] [--week current|W0|all] [--limit N] [-f FORMAT]
+```
+
+Plan ceilings (best-effort): Pro 44M / Max5 88M / Max20 220M tokens per week.
+Anchor: 2026-05-15 12:00 UTC (last public Anthropic flush). Override via
+`CLAUDE_RESET_ANCHOR=<ISO-8601>`.
+
+### `accounts` — Account List + Switch History
+
+```bash
+devboy-tools-agent-usage accounts [--switches] [-f FORMAT]
+```
+
+Default: list accounts with plan, first/last_seen, total turns + cost.
+With `--switches`: history of account transitions with confidence (low/medium/high).
+
+Account ID derived from `SipHash(refreshToken)` in `~/.claude/.credentials.json`.
+Override via `CLAUDE_ACCOUNT=<id>`.
+
+### `biome` — Aquarium Classification
+
+```bash
+devboy-tools-agent-usage biome [--account ID] [--from DATE] [--to DATE] [-f FORMAT]
+```
+
+Per-session biome classification by assistant turn count (matches
+[`analyze-usage` skill](https://github.com/anthropics/claude-code-skills) thresholds):
+
+| Biome | Threshold | Emoji |
+|-------|-----------|-------|
+| Whale | ≥500 | 🐋 |
+| Shark | ≥100 | 🦈 |
+| Dolphin | ≥30 | 🐬 |
+| Fish | ≥10 | 🐟 |
+| Shrimp | ≥3 | 🦐 |
+| Plankton | <3 | 🦠 |
+
+### `statusline` — Compact tmux Status
+
+```bash
+devboy-tools-agent-usage statusline [--account ID] -f tmux|raw|json
+```
+
+Width-stable one-line summary for tmux: 5h burn rate + cost + time remaining + weekly % + plan.
+
+Example output: `🟠   6k/m $    81 ⏰4h55m W:  5.1% Max20`
+
+Burn emoji: 🟢 <1k/min, 🟡 1-5k, 🟠 5-15k, 🔴 >15k tokens per minute.
+
+**tmux integration**: copy `scripts/cc-stat.sh.example` to `~/.tmux/scripts/cc-stat.sh`,
+then in `~/.tmux.conf`:
+
+```tmux
+set -g status-interval 5
+set -g status-right "... #(~/.tmux/scripts/cc-stat.sh) ..."
+```
+
+The wrapper uses two-tier caching (5s output cache + 30s background indexer) so tmux
+refresh stays under 5 ms while data stays fresh.
 
 ### `focus` — Focus Analysis
 

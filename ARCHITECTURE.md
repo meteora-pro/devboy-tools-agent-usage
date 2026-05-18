@@ -351,6 +351,30 @@ src/
 │   ├── session.rs             # ClaudeSession, Turn building
 │   └── tokens.rs              # Cost calculation by model
 │
+├── index/                     # ★ Incremental SQLite index (v0.5)
+│   ├── mod.rs
+│   ├── schema.rs              # Schema v1+v2 + migrations
+│   └── indexer.rs             # mtime+offset watermark, incremental update
+│
+├── account/                   # ★ Claude Code accounts (v0.5)
+│   ├── mod.rs
+│   ├── detection.rs           # Read credentials.json, SipHash(refresh) → id
+│   ├── plan.rs                # Plan enum (Free/Pro/Max5/Max20) + ceilings
+│   └── switching.rs           # Heuristic detection of account transitions
+│
+├── blocks/                    # ★ 5h rate-limit blocks (v0.5)
+│   ├── mod.rs
+│   └── engine.rs              # build_blocks / find_active over indexed turns
+│
+├── limits/                    # ★ Weekly rate-limit windows (v0.5)
+│   ├── mod.rs
+│   ├── weekly.rs              # Anchor-based windows + SQL CASE expr
+│   └── engine.rs              # WeeklyUsage with % against plan ceiling
+│
+├── biome/                     # ★ Aquarium classification (v0.5)
+│   ├── mod.rs
+│   └── engine.rs              # 6-biome (Whale/.../Plankton) per session
+│
 ├── activity/                  # ActivityWatch integration
 │   ├── mod.rs
 │   ├── models.rs              # AppCategory, BrowserCategory
@@ -371,8 +395,32 @@ src/
 │
 └── output/                    # Formatting and output
     ├── mod.rs
-    ├── commands.rs             # Command implementations
+    ├── commands.rs             # Command implementations (incl. v0.5 commands)
     ├── table.rs                # Tables (comfy_table)
     ├── json.rs                 # JSON output
     └── timeline.rs             # Detailed per-turn timeline
 ```
+
+## v0.5 Incremental Index Pipeline
+
+```
+~/.claude/projects/*.jsonl
+        │
+        ▼  index::indexer::index_all (incremental)
+~/.cache/devboy-tools-agent-usage/index.db (SQLite WAL)
+        │
+        ├─ parsed_files   — (path, mtime_ns, size, last_offset, parsed_at)
+        ├─ accounts       — (id, plan, first/last_seen_ms, notes)
+        ├─ account_switches — (ts, prev, current, confidence)
+        └─ turns          — (session_id, ts_ms, model, account_id,
+                             tokens_in/out/cache_create/cache_read, cost_usd)
+                          + indexes на ts_ms, session_id, (account_id, ts_ms)
+        │
+        ▼  blocks / limits / biome / statusline (read-only queries)
+        │
+        ▼  tmux scripts/cc-stat.sh (5s output cache + 30s bg index)
+        │
+        ▼  status-bar
+```
+
+Cold: ~10s on 2 GB JSONL. Warm: ~50 ms. tmux refresh: ~5 ms (cache hit).
