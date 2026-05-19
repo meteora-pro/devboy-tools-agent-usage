@@ -25,8 +25,11 @@ pub struct WeeklyUsage {
     pub turns: i64,
     /// Cost в USD (по нашей simplified модели).
     pub cost_usd: f64,
-    /// Потолок (None для Unknown plan).
+    /// Потолок (None для Unknown plan без override).
     pub ceiling: Option<u64>,
+    /// Источник ceiling: "manual" | "calibrated" | "default-community" | None.
+    /// `*` индикатор в statusline для default-community значит "приблизительно".
+    pub ceiling_source: Option<String>,
     /// Процент использования (None если ceiling неизвестен).
     pub percent: Option<f64>,
 }
@@ -62,7 +65,9 @@ pub fn usage_for(conn: &Connection, account_id: &str, window: WeeklyWindow) -> R
     let turns = row.2.unwrap_or(0);
     let cost = row.3.unwrap_or(0.0);
 
-    let ceiling = plan.weekly_token_ceiling();
+    // Resolve ceiling: priority manual/calibrated override > default-community fallback.
+    let (ceiling, ceiling_source) = resolve_ceiling(conn, account_id, plan)?;
+
     let percent = ceiling.map(|c| {
         if c == 0 {
             0.0
@@ -80,8 +85,38 @@ pub fn usage_for(conn: &Connection, account_id: &str, window: WeeklyWindow) -> R
         turns,
         cost_usd: cost,
         ceiling,
+        ceiling_source,
         percent,
     })
+}
+
+/// Решить какой ceiling использовать.
+///
+/// Приоритет:
+/// 1. plan_overrides.weekly_ceiling_tokens (source: manual / calibrated)
+/// 2. Plan.weekly_token_ceiling() (source: default-community)
+/// 3. None (Plan::Unknown без override)
+pub fn resolve_ceiling(
+    conn: &Connection,
+    account_id: &str,
+    plan: Plan,
+) -> Result<(Option<u64>, Option<String>)> {
+    let override_row: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT weekly_ceiling_tokens, source FROM plan_overrides WHERE account_id = ?",
+            params![account_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+
+    if let Some((tokens, source)) = override_row {
+        return Ok((Some(tokens as u64), Some(source)));
+    }
+
+    match plan.weekly_token_ceiling() {
+        Some(c) => Ok((Some(c), Some("default-community".to_string()))),
+        None => Ok((None, None)),
+    }
 }
 
 /// Вычислить usage для текущего активного окна аккаунта.
@@ -118,6 +153,80 @@ mod tests {
             params!["s", ts, account, input, output, 0.001],
         )
         .unwrap();
+    }
+
+    fn set_override(conn: &Connection, account: &str, ceiling: i64, source: &str) {
+        conn.execute(
+            "INSERT INTO plan_overrides
+             (account_id, weekly_ceiling_tokens, source, set_at)
+             VALUES (?, ?, ?, datetime('now'))",
+            params![account, ceiling, source],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn no_override_uses_default_community() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Pro);
+        let (ceiling, source) = resolve_ceiling(&c, "a", Plan::Pro).unwrap();
+        assert_eq!(ceiling, Some(44_000_000));
+        assert_eq!(source.as_deref(), Some("default-community"));
+    }
+
+    #[test]
+    fn manual_override_wins_over_default() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Pro);
+        set_override(&c, "a", 99_000_000, "manual");
+        let (ceiling, source) = resolve_ceiling(&c, "a", Plan::Pro).unwrap();
+        assert_eq!(ceiling, Some(99_000_000));
+        assert_eq!(source.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn calibrated_override_wins_over_default() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Max20);
+        set_override(&c, "a", 250_000_000, "calibrated");
+        let (ceiling, source) = resolve_ceiling(&c, "a", Plan::Max20).unwrap();
+        assert_eq!(ceiling, Some(250_000_000));
+        assert_eq!(source.as_deref(), Some("calibrated"));
+    }
+
+    #[test]
+    fn unknown_plan_no_override_returns_none() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Unknown);
+        let (ceiling, source) = resolve_ceiling(&c, "a", Plan::Unknown).unwrap();
+        assert_eq!(ceiling, None);
+        assert_eq!(source, None);
+    }
+
+    #[test]
+    fn unknown_plan_with_override_uses_override() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Unknown);
+        set_override(&c, "a", 50_000_000, "manual");
+        let (ceiling, source) = resolve_ceiling(&c, "a", Plan::Unknown).unwrap();
+        assert_eq!(ceiling, Some(50_000_000));
+        assert_eq!(source.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn usage_for_propagates_ceiling_source() {
+        let (_d, c) = open();
+        insert_account(&c, "a", Plan::Pro);
+        let anchor = weekly::anchor_ms();
+        insert_turn(&c, anchor + 1000, "a", 1000, 500);
+
+        let u = usage_for(&c, "a", WeeklyWindow::nth(0, anchor)).unwrap();
+        assert_eq!(u.ceiling_source.as_deref(), Some("default-community"));
+
+        set_override(&c, "a", 99_000_000, "manual");
+        let u2 = usage_for(&c, "a", WeeklyWindow::nth(0, anchor)).unwrap();
+        assert_eq!(u2.ceiling_source.as_deref(), Some("manual"));
+        assert_eq!(u2.ceiling, Some(99_000_000));
     }
 
     #[test]
