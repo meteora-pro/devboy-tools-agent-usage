@@ -263,8 +263,13 @@ fn main() -> Result<()> {
             cli::ActivityAction::Watch { interval } => {
                 output::commands::activity_watch(interval)?;
             }
-            cli::ActivityAction::Report { .. } => {
-                anyhow::bail!("report not yet implemented (tmux.T6)");
+            cli::ActivityAction::Report {
+                from,
+                to,
+                top,
+                format,
+            } => {
+                output::commands::activity_report(from.as_deref(), to.as_deref(), top, &format)?;
             }
         },
         Commands::Index { full, quiet } => {

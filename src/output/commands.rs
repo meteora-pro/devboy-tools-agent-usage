@@ -1245,6 +1245,160 @@ fn format_token_count(n: u64) -> String {
     }
 }
 
+/// Команда: agent-usage activity report — аналитика по tmux_activity.
+pub fn activity_report(
+    from: Option<&str>,
+    to: Option<&str>,
+    top: usize,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+
+    let from_ms = from.and_then(parse_date_to_ms).unwrap_or(0);
+    let to_ms = to.and_then(parse_date_to_ms).unwrap_or(i64::MAX);
+
+    // Total stats — distinct snapshots, range
+    let (snap_count, first_ts, last_ts): (i64, Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT ts_ms), MIN(ts_ms), MAX(ts_ms)
+             FROM tmux_activity WHERE ts_ms >= ? AND ts_ms < ?",
+            rusqlite::params![from_ms, to_ms],
+            |r| Ok((r.get(0)?, r.get(1).ok(), r.get(2).ok())),
+        )
+        .unwrap_or((0, None, None));
+
+    if snap_count == 0 {
+        match format {
+            OutputFormat::Json => println!("{{\"snapshots\": 0}}"),
+            _ => println!("(нет данных — запустите `agent-usage activity watch`)"),
+        }
+        return Ok(());
+    }
+
+    // Per-command активность (только pane_active=1, то есть видимая для пользователя).
+    let mut cmd_stmt = conn.prepare(
+        "SELECT command, COUNT(*) AS n
+         FROM tmux_activity
+         WHERE ts_ms >= ? AND ts_ms < ? AND pane_active = 1
+         GROUP BY command ORDER BY n DESC LIMIT ?",
+    )?;
+    let commands: Vec<(String, i64)> = cmd_stmt
+        .query_map(rusqlite::params![from_ms, to_ms, top as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    drop(cmd_stmt);
+
+    // Per-session активность
+    let mut sess_stmt = conn.prepare(
+        "SELECT session, COUNT(*) AS n
+         FROM tmux_activity
+         WHERE ts_ms >= ? AND ts_ms < ? AND pane_active = 1
+         GROUP BY session ORDER BY n DESC LIMIT ?",
+    )?;
+    let sessions: Vec<(String, i64)> = sess_stmt
+        .query_map(rusqlite::params![from_ms, to_ms, top as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    drop(sess_stmt);
+
+    // Idle stats: snapshots где idle_ms > 5 min
+    let idle_threshold_ms = 5 * 60 * 1000_i64;
+    let (idle_snaps, idle_known): (i64, i64) = conn
+        .query_row(
+            "SELECT
+                COUNT(DISTINCT CASE WHEN idle_ms > ? THEN ts_ms END),
+                COUNT(DISTINCT CASE WHEN idle_ms IS NOT NULL THEN ts_ms END)
+             FROM tmux_activity WHERE ts_ms >= ? AND ts_ms < ?",
+            rusqlite::params![idle_threshold_ms, from_ms, to_ms],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+
+    let total_active_count: i64 = commands.iter().map(|(_, n)| *n).sum();
+
+    match format {
+        OutputFormat::Json => {
+            let v = serde_json::json!({
+                "snapshots": snap_count,
+                "first_ts_ms": first_ts,
+                "last_ts_ms": last_ts,
+                "top_commands": commands.iter().map(|(c, n)| serde_json::json!({
+                    "command": c, "count": n
+                })).collect::<Vec<_>>(),
+                "top_sessions": sessions.iter().map(|(s, n)| serde_json::json!({
+                    "session": s, "count": n
+                })).collect::<Vec<_>>(),
+                "idle_snapshots": idle_snaps,
+                "idle_data_available": idle_known,
+                "idle_threshold_ms": idle_threshold_ms,
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        OutputFormat::Csv => {
+            println!("kind,name,count");
+            for (c, n) in &commands {
+                println!("command,{},{}", c, n);
+            }
+            for (s, n) in &sessions {
+                println!("session,{},{}", s, n);
+            }
+            println!("__snapshots,total,{}", snap_count);
+            println!("__idle_above_threshold,count,{}", idle_snaps);
+        }
+        OutputFormat::Table => {
+            println!(
+                "Range: {} → {}  ({} snapshots)",
+                first_ts.map(iso_from_ms).unwrap_or_else(|| "?".into()),
+                last_ts.map(iso_from_ms).unwrap_or_else(|| "?".into()),
+                snap_count,
+            );
+            println!();
+            println!("Top commands (по активным pane'ам):");
+            let max_cnt = commands.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+            for (c, n) in &commands {
+                let bar_len = ((*n as f64 / max_cnt as f64) * 40.0).round() as usize;
+                let pct = if total_active_count > 0 {
+                    (*n as f64 / total_active_count as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "  {:<14} {:>6} ({:>5.1}%) {}",
+                    c,
+                    n,
+                    pct,
+                    "█".repeat(bar_len)
+                );
+            }
+            println!();
+            println!("Top sessions:");
+            let max_s = sessions.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+            for (s, n) in &sessions {
+                let bar_len = ((*n as f64 / max_s as f64) * 40.0).round() as usize;
+                println!("  {:<14} {:>6}        {}", s, n, "█".repeat(bar_len));
+            }
+            println!();
+            if idle_known > 0 {
+                let idle_pct = (idle_snaps as f64 / idle_known as f64) * 100.0;
+                println!(
+                    "Idle ({}+ мин): {} / {} snapshots = {:.1}%",
+                    idle_threshold_ms / 60_000,
+                    idle_snaps,
+                    idle_known,
+                    idle_pct,
+                );
+            } else {
+                println!("Idle: данных нет (idle_ms не определён ни на одном snapshot)");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Команда: long-running daemon, snapshot каждые interval секунд.
 /// Завершается по SIGTERM/SIGINT (Ctrl+C).
 pub fn activity_watch(interval_secs: u64) -> Result<()> {
