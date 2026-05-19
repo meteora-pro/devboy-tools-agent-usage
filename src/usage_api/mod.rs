@@ -9,4 +9,5 @@
 //! Token читается из `~/.claude/.credentials.json` каждый запрос (он там
 //! актуальный — Claude Code сам refresh-ит). Сам token нигде не сохраняем.
 
+pub mod cache;
 pub mod client;

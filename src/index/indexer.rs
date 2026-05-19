@@ -475,7 +475,13 @@ mod tests {
     use super::*;
     use crate::index::schema::open_index_at;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    /// Mutex для последовательного запуска тестов, которые мутируют
+    /// global ENV (CLAUDE_ACCOUNT). std::env::set_var не thread-safe в
+    /// присутствии параллельных тестов, и без этого lock'а тесты flaky.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Создать синтетическую структуру Claude Code projects:
     /// ~/.claude/projects/-project1/<uuid>.jsonl
@@ -767,10 +773,12 @@ mod tests {
         let _ = make_fixture(&projects, "-p", uuid, &line_refs);
 
         // Запускаем index_all с явным test-acc через env override
+        let _g = ENV_LOCK.lock().unwrap();
         std::env::set_var("CLAUDE_ACCOUNT", "test-acc");
         let mut conn = open_index_at(&db_path).unwrap();
         let stats = index_all(&mut conn, &projects).unwrap();
         std::env::remove_var("CLAUDE_ACCOUNT");
+        drop(_g);
 
         assert_eq!(stats.rate_limit_events_detected, 1);
         assert_eq!(
@@ -830,10 +838,12 @@ mod tests {
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let _ = make_fixture(&projects, "-p", uuid, &line_refs);
 
+        let _g = ENV_LOCK.lock().unwrap();
         std::env::set_var("CLAUDE_ACCOUNT", "test-acc");
         let mut conn = open_index_at(&db_path).unwrap();
         let _stats = index_all(&mut conn, &projects).unwrap();
         std::env::remove_var("CLAUDE_ACCOUNT");
+        drop(_g);
 
         // Manual должен сохраниться
         let (tokens, source): (i64, String) = conn
