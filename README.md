@@ -8,9 +8,11 @@ Reads JSONL logs from `~/.claude/projects/`, optionally correlates with [Activit
 
 - **Incremental SQLite index** — 2 GB of JSONL → 50 MB DB, cold ~10 sec, warm ~50 ms
 - **5h rate-limit blocks** — Anthropic-style sliding blocks with burn rate + projection
-- **Weekly limits** — % usage per account against plan ceiling (Pro/Max5/Max20).
-  Three-tier ceiling: manual override > auto-calibrated from 429 > community estimate.
-  Statusline shows `*` for community estimates (`W:5.1%*`)
+- **OAuth usage** — real `5h%` / `7d%` from Anthropic's `/api/oauth/usage` endpoint,
+  the same numbers shown by `/status` inside Claude Code. No guessing ceilings.
+  Cached 120s in SQLite, statusline shows live values.
+- **Weekly limits (legacy fallback)** — three-tier ceiling (manual / calibrated / community)
+  used only when OAuth endpoint is unavailable. Statusline marks fallback with `*`.
 - **Account detection** — auto-discovered from `~/.claude/.credentials.json` (no JWT parsing,
   no tokens stored — only SipHash of refresh token)
 - **Account switching** — heuristic detection of credential changes between indexer runs
@@ -258,9 +260,55 @@ Per-session biome classification by assistant turn count (matches
 | Shrimp | ≥3 | 🦐 |
 | Plankton | <3 | 🦠 |
 
-### `ceiling` — Honest Weekly Ceiling
+### `usage` — Real Utilization from OAuth API ★ Recommended
 
-Three-tier ceiling resolution:
+Reads the **undocumented** `/api/oauth/usage` endpoint that powers `/status`
+inside Claude Code. Returns exactly the same `%` figures you'd see there —
+no guessing ceilings.
+
+```bash
+devboy-tools-agent-usage usage              # cached (TTL 120s)
+devboy-tools-agent-usage usage --refresh    # force fresh fetch
+devboy-tools-agent-usage usage -f json      # raw API response
+```
+
+Output:
+```
+source: Cached  ts: 2026-05-19 09:18
+account: 997878c3c2457d6e
+┌───────────┬───────┬──────────────────────────────────┐
+│ metric    │ %     │ resets at (UTC)                  │
+╞═══════════╪═══════╪══════════════════════════════════╡
+│ 5h window │ 0.0%  │ 2026-05-19T14:10:00+00:00        │
+│ 7d window │ 45.0% │ 2026-05-23T04:00:00+00:00        │
+│ 7d Sonnet │ 0.0%  │ —                                │
+└───────────┴───────┴──────────────────────────────────┘
+
+Extra (overage budget): EUR 0.00 / 2000 = 0.0%
+```
+
+How it works:
+- Reads `accessToken` from `~/.claude/.credentials.json` (Claude Code keeps it fresh)
+- Sends `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20`
+- Snapshots persisted to SQLite (`oauth_usage_snapshots`) for trends + reconciliation
+- Cache TTL 120s (the endpoint has its own rate limit; respect it)
+
+**The statusline** (`#(cc-stat.sh)`) shows these numbers automatically:
+```
+🟡  3k/m $  18 ⏰4h56m  5h: 0.0% W:45.0%  Max20
+                          ↑           ↑
+                      OAuth real  OAuth real
+```
+
+This is **the** source of truth — synchronized 1-to-1 with `/status`.
+
+### `ceiling` — Manual Weekly Ceiling (Fallback when OAuth unavailable)
+
+> Since v0.6 the OAuth `usage` command above is **the** source of truth.
+> The hardcoded ceiling system remains as fallback for situations where the
+> endpoint is unavailable (expired token, network down, 429 from endpoint itself).
+
+Three-tier ceiling resolution (used only when OAuth fails):
 
 | Source | When |
 |--------|------|

@@ -1169,6 +1169,117 @@ pub fn parse_token_count(s: &str) -> Result<u64> {
     Ok((n * mult as f64).round() as u64)
 }
 
+/// Команда: usage — реальные % из OAuth endpoint.
+pub fn usage_cmd(
+    refresh: bool,
+    ttl: i64,
+    account: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+
+    let account_id: Option<String> = match account {
+        Some(a) => Some(a.to_string()),
+        None => detection::detect_current().map(|i| i.id),
+    };
+
+    let effective_ttl = if refresh { 0 } else { ttl };
+    let cached =
+        crate::usage_api::cache::fetch_cached(&conn, effective_ttl, account_id.as_deref())?;
+
+    let u = &cached.usage;
+    match format {
+        OutputFormat::Json => {
+            let v = serde_json::json!({
+                "source": format!("{:?}", cached.source),
+                "ts_ms": cached.ts_ms,
+                "account_id": account_id,
+                "usage": u,
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        OutputFormat::Csv => {
+            println!("metric,utilization_pct,resets_at");
+            println!(
+                "five_hour,{:.1},{}",
+                u.five_hour.utilization,
+                u.five_hour.resets_at.as_deref().unwrap_or("")
+            );
+            println!(
+                "seven_day,{:.1},{}",
+                u.seven_day.utilization,
+                u.seven_day.resets_at.as_deref().unwrap_or("")
+            );
+            if let Some(s) = &u.seven_day_sonnet {
+                println!(
+                    "seven_day_sonnet,{:.1},{}",
+                    s.utilization,
+                    s.resets_at.as_deref().unwrap_or("")
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec!["metric", "%", "resets at (UTC)"]);
+
+            let color_for = |p: f64| -> Color {
+                if p >= 90.0 {
+                    Color::Red
+                } else if p >= 70.0 {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                }
+            };
+
+            let mut add = |name: &str, p: f64, resets: &Option<String>| {
+                table.add_row(vec![
+                    Cell::new(name),
+                    Cell::new(format!("{:.1}%", p)).fg(color_for(p)),
+                    Cell::new(resets.as_deref().unwrap_or("—")),
+                ]);
+            };
+
+            add("5h window", u.five_hour.utilization, &u.five_hour.resets_at);
+            add("7d window", u.seven_day.utilization, &u.seven_day.resets_at);
+            if let Some(s) = &u.seven_day_sonnet {
+                add("7d Sonnet", s.utilization, &s.resets_at);
+            }
+            if let Some(o) = &u.seven_day_opus {
+                add("7d Opus", o.utilization, &o.resets_at);
+            }
+
+            println!(
+                "source: {:?}  ts: {}",
+                cached.source,
+                iso_from_ms(cached.ts_ms)
+            );
+            if let Some(a) = &account_id {
+                println!("account: {}", a);
+            }
+            println!("{table}");
+
+            if let Some(e) = &u.extra_usage {
+                if e.is_enabled {
+                    let used_pct = if e.monthly_limit > 0.0 {
+                        e.used_credits / e.monthly_limit * 100.0
+                    } else {
+                        0.0
+                    };
+                    println!();
+                    println!(
+                        "Extra (overage budget): {} {:.2} / {:.0} = {:.1}%",
+                        e.currency, e.used_credits, e.monthly_limit, used_pct,
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Команда: ceiling — show или set manual override.
 pub fn ceiling_cmd(
     account: Option<&str>,

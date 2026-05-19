@@ -257,6 +257,14 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Usage {
+            refresh,
+            ttl,
+            account,
+            format,
+        } => {
+            output::commands::usage_cmd(refresh, ttl, account.as_deref(), &format)?;
+        }
         Commands::Activity { action } => match action {
             cli::ActivityAction::Collect { dry_run } => {
                 output::commands::activity_collect(dry_run)?;

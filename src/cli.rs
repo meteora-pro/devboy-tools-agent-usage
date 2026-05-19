@@ -332,6 +332,28 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Real-time usage из Anthropic OAuth /api/oauth/usage.
+    ///
+    /// Те же проценты что показывает /status внутри Claude Code.
+    /// Cache TTL 120 сек по умолчанию (защита от 429 endpoint'а).
+    Usage {
+        /// Принудительно сделать fresh fetch минуя cache.
+        #[arg(long)]
+        refresh: bool,
+
+        /// TTL cache в секундах (default 120). Используется для расчёта Cached/Stale.
+        #[arg(long, default_value = "120")]
+        ttl: i64,
+
+        /// Account для записи в snapshot (по умолчанию — detect_current).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Управление weekly ceiling: show / set manual override.
     ///
     /// Без флагов — показать текущий ceiling и его источник (manual /
