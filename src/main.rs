@@ -13,6 +13,7 @@ mod index;
 mod limits;
 mod output;
 mod tmux_activity;
+mod usage_api;
 
 use anyhow::Result;
 use clap::Parser;
