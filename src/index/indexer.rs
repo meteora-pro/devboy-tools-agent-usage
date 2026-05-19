@@ -43,13 +43,15 @@ pub struct IndexStats {
     pub files_errored: usize,
     pub turns_inserted: usize,
     pub lines_invalid_json: usize,
+    pub rate_limit_events_detected: usize,
+    pub ceilings_calibrated: usize,
 }
 
 impl IndexStats {
     /// Краткое summary для CLI / лога.
     pub fn summary(&self) -> String {
         format!(
-            "scanned={} skip={} full={} inc={} trunc={} miss={} err={} turns+={} bad_json={}",
+            "scanned={} skip={} full={} inc={} trunc={} miss={} err={} turns+={} bad_json={} 429={} calibrated={}",
             self.files_scanned,
             self.files_skipped,
             self.files_parsed_full,
@@ -59,6 +61,8 @@ impl IndexStats {
             self.files_errored,
             self.turns_inserted,
             self.lines_invalid_json,
+            self.rate_limit_events_detected,
+            self.ceilings_calibrated,
         )
     }
 }
@@ -204,6 +208,8 @@ fn index_one_file(
     let mut current_offset = start_offset;
     let mut local_inserted = 0usize;
     let mut local_invalid = 0usize;
+    // Накопленные rate_limit ts для post-processing после файла.
+    let mut local_rate_limits: Vec<i64> = Vec::new();
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -212,6 +218,13 @@ fn index_one_file(
         };
         // BufRead.lines() съедает \n, добавляем 1 байт обратно к offset
         let line_bytes = line.len() as u64 + 1;
+
+        // Сначала ищем rate_limit event — это дешевле чем full parse_event
+        if line.contains("\"subtype\":\"api_error\"") && line.contains("rate_limit_error") {
+            if let Some(ts) = extract_event_ts_ms(&line) {
+                local_rate_limits.push(ts);
+            }
+        }
 
         match parse_assistant_event(&line) {
             Ok(Some(rec)) => {
@@ -265,7 +278,85 @@ fn index_one_file(
 
     stats.turns_inserted += local_inserted;
     stats.lines_invalid_json += local_invalid;
+    stats.rate_limit_events_detected += local_rate_limits.len();
+
+    // Calibrate from detected rate-limit events.
+    if let Some(account) = current_account {
+        for ts in local_rate_limits {
+            match calibrate_from_rate_limit(conn, &account.id, ts) {
+                Ok(true) => stats.ceilings_calibrated += 1,
+                Ok(false) => {}
+                Err(e) => eprintln!("Warning: calibrate failed: {}", e),
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Извлечь timestamp из JSONL события (для дешёвой быстрой проверки без full parse).
+fn extract_event_ts_ms(line: &str) -> Option<i64> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let ts_str = v.get("timestamp").and_then(|x| x.as_str())?;
+    chrono::DateTime::parse_from_rfc3339(ts_str)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc).timestamp_millis())
+}
+
+/// Записать calibrated ceiling по факту 429 в JSONL.
+///
+/// Stratey: weekly_ceiling = SUM(input+output) для (account, current_week) до момента error.
+/// Это даёт точную нижнюю оценку: tokens consumed when limit hit.
+///
+/// Не перезаписывает manual override. Default-community → calibrated можно.
+///
+/// Returns true если override был записан/обновлён.
+fn calibrate_from_rate_limit(conn: &Connection, account_id: &str, ts_ms: i64) -> Result<bool> {
+    use crate::limits::weekly;
+
+    let anchor = weekly::anchor_ms();
+    let window = weekly::window_for_ts(ts_ms, anchor);
+
+    // Sum tokens в этом окне до момента error.
+    let used: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(tokens_input + tokens_output), 0)
+             FROM turns
+             WHERE account_id = ? AND ts_ms >= ? AND ts_ms < ?",
+            params![account_id, window.start_ms, ts_ms],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    if used <= 0 {
+        return Ok(false);
+    }
+
+    // Не перезаписываем manual.
+    let existing_source: Option<String> = conn
+        .query_row(
+            "SELECT source FROM plan_overrides WHERE account_id = ?",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .ok();
+    if matches!(existing_source.as_deref(), Some("manual")) {
+        return Ok(false);
+    }
+
+    conn.execute(
+        "INSERT INTO plan_overrides
+         (account_id, weekly_ceiling_tokens, source, set_at, notes)
+         VALUES (?, ?, 'calibrated', datetime('now'),
+                 'auto-detected at ts_ms=' || ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+            weekly_ceiling_tokens = excluded.weekly_ceiling_tokens,
+            source = excluded.source,
+            set_at = excluded.set_at,
+            notes = excluded.notes",
+        params![account_id, used, ts_ms],
+    )?;
+    Ok(true)
 }
 
 /// Минимальные данные turn'а, нужные для SQLite-индекса.
@@ -634,6 +725,129 @@ mod tests {
             stats.turns_inserted, 1,
             "только assistant event должен попасть в turns"
         );
+    }
+
+    #[test]
+    fn detects_rate_limit_event_and_calibrates() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let db_path = tmp.path().join("idx.db");
+
+        let uuid = "88888888-8888-8888-8888-888888888888";
+
+        // Сначала пишем accounts row (FK), затем создаём JSONL.
+        let mut conn = open_index_at(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, plan) VALUES ('test-acc', 'Pro')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        // anchor 2026-05-15T12:00:00Z = 1778846400000ms.
+        // Делаем 3 assistant events до error + rate_limit_error.
+        let mut lines = Vec::new();
+        for i in 0..3 {
+            lines.push(format!(
+                "{{\"type\":\"assistant\",\"sessionId\":\"{}\",\"timestamp\":\"2026-05-16T10:00:{:02}Z\",\
+                 \"message\":{{\"model\":\"claude-sonnet-4-6\",\"usage\":\
+                 {{\"input_tokens\":10000,\"output_tokens\":5000,\"cache_creation_input_tokens\":0,\
+                 \"cache_read_input_tokens\":0}}}}}}",
+                uuid, i * 10
+            ));
+        }
+        // rate_limit_error 11:00 same day
+        lines.push(format!(
+            "{{\"type\":\"system\",\"subtype\":\"api_error\",\"sessionId\":\"{}\",\
+             \"timestamp\":\"2026-05-16T11:00:00Z\",\
+             \"error\":{{\"type\":\"rate_limit_error\",\"message\":\"weekly limit reached\"}}}}",
+            uuid
+        ));
+        let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let _ = make_fixture(&projects, "-p", uuid, &line_refs);
+
+        // Запускаем index_all с явным test-acc через env override
+        std::env::set_var("CLAUDE_ACCOUNT", "test-acc");
+        let mut conn = open_index_at(&db_path).unwrap();
+        let stats = index_all(&mut conn, &projects).unwrap();
+        std::env::remove_var("CLAUDE_ACCOUNT");
+
+        assert_eq!(stats.rate_limit_events_detected, 1);
+        assert_eq!(
+            stats.ceilings_calibrated, 1,
+            "должна быть записана calibrated запись"
+        );
+
+        // Проверяем что в plan_overrides записалось: 3 turns × 15k tokens = 45k
+        let (tokens, source): (i64, String) = conn
+            .query_row(
+                "SELECT weekly_ceiling_tokens, source FROM plan_overrides WHERE account_id = 'test-acc'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tokens, 45_000);
+        assert_eq!(source, "calibrated");
+    }
+
+    #[test]
+    fn calibrate_does_not_overwrite_manual_override() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let db_path = tmp.path().join("idx.db");
+        let uuid = "99999999-9999-9999-9999-999999999999";
+
+        let mut conn = open_index_at(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, plan) VALUES ('test-acc', 'Pro')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plan_overrides
+             (account_id, weekly_ceiling_tokens, source, set_at)
+             VALUES ('test-acc', 99000000, 'manual', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut lines = Vec::new();
+        for i in 0..3 {
+            lines.push(format!(
+                "{{\"type\":\"assistant\",\"sessionId\":\"{}\",\"timestamp\":\"2026-05-16T10:00:{:02}Z\",\
+                 \"message\":{{\"model\":\"claude-sonnet-4-6\",\"usage\":\
+                 {{\"input_tokens\":10000,\"output_tokens\":5000}}}}}}",
+                uuid, i * 10
+            ));
+        }
+        lines.push(format!(
+            "{{\"type\":\"system\",\"subtype\":\"api_error\",\"sessionId\":\"{}\",\
+             \"timestamp\":\"2026-05-16T11:00:00Z\",\
+             \"error\":{{\"type\":\"rate_limit_error\"}}}}",
+            uuid
+        ));
+        let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let _ = make_fixture(&projects, "-p", uuid, &line_refs);
+
+        std::env::set_var("CLAUDE_ACCOUNT", "test-acc");
+        let mut conn = open_index_at(&db_path).unwrap();
+        let _stats = index_all(&mut conn, &projects).unwrap();
+        std::env::remove_var("CLAUDE_ACCOUNT");
+
+        // Manual должен сохраниться
+        let (tokens, source): (i64, String) = conn
+            .query_row(
+                "SELECT weekly_ceiling_tokens, source FROM plan_overrides WHERE account_id = 'test-acc'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            tokens, 99_000_000,
+            "manual override не должен быть перезаписан"
+        );
+        assert_eq!(source, "manual");
     }
 
     #[test]
