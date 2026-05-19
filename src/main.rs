@@ -260,8 +260,8 @@ fn main() -> Result<()> {
             cli::ActivityAction::Collect { dry_run } => {
                 output::commands::activity_collect(dry_run)?;
             }
-            cli::ActivityAction::Watch { interval: _ } => {
-                anyhow::bail!("watch not yet implemented (tmux.T5)");
+            cli::ActivityAction::Watch { interval } => {
+                output::commands::activity_watch(interval)?;
             }
             cli::ActivityAction::Report { .. } => {
                 anyhow::bail!("report not yet implemented (tmux.T6)");

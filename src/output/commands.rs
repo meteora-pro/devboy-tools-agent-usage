@@ -1245,6 +1245,58 @@ fn format_token_count(n: u64) -> String {
     }
 }
 
+/// Команда: long-running daemon, snapshot каждые interval секунд.
+/// Завершается по SIGTERM/SIGINT (Ctrl+C).
+pub fn activity_watch(interval_secs: u64) -> Result<()> {
+    if interval_secs == 0 {
+        anyhow::bail!("--interval должен быть >= 1");
+    }
+    let conn = schema::open_index()?;
+    eprintln!(
+        "[activity watch] starting, interval={}s, db={}",
+        interval_secs,
+        schema::index_db_path()?.display()
+    );
+
+    let mut errors_streak = 0u32;
+    let mut snapshot_count = 0u64;
+
+    loop {
+        let now = Utc::now().timestamp_millis();
+        let panes = tmux_poller::poll().unwrap_or_default();
+        let idle_ms = tmux_idle::current_idle_ms();
+
+        if panes.is_empty() {
+            // tmux server не запущен — будем ждать пока поднимется.
+            // Лог только редко, чтобы не шуметь.
+            if errors_streak % 30 == 0 {
+                eprintln!("[activity watch] tmux server не отвечает (waiting)");
+            }
+            errors_streak = errors_streak.saturating_add(1);
+        } else {
+            match tmux_store::insert_snapshot(&conn, now, &panes, idle_ms) {
+                Ok(n) => {
+                    snapshot_count += 1;
+                    errors_streak = 0;
+                    // Логируем каждые 60 итераций (по умолчанию = раз в 10 минут на interval=10s)
+                    if snapshot_count % 60 == 0 {
+                        eprintln!(
+                            "[activity watch] {} snapshots, panes={} idle_ms={:?}",
+                            snapshot_count, n, idle_ms
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: insert failed: {}", e);
+                    errors_streak = errors_streak.saturating_add(1);
+                }
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+    }
+}
+
 /// Команда: одна snapshot tmux activity. Под --dry-run только печатает.
 pub fn activity_collect(dry_run: bool) -> Result<()> {
     let panes = tmux_poller::poll()?;
