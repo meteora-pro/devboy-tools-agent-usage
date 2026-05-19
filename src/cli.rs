@@ -349,6 +349,22 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
 
+        /// Показать историю snapshots вместо текущего значения (с delta-колонками).
+        #[arg(long)]
+        history: bool,
+
+        /// История: начало (YYYY-MM-DD).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// История: конец (YYYY-MM-DD).
+        #[arg(long)]
+        to: Option<String>,
+
+        /// История: лимит rows.
+        #[arg(short, long, default_value = "30")]
+        limit: usize,
+
         /// Формат вывода.
         #[arg(short, long, default_value = "table")]
         format: OutputFormat,

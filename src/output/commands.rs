@@ -1169,11 +1169,89 @@ pub fn parse_token_count(s: &str) -> Result<u64> {
     Ok((n * mult as f64).round() as u64)
 }
 
+/// Команда: история snapshots с delta-колонками.
+fn usage_history_cmd(
+    conn: &rusqlite::Connection,
+    account: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    limit: usize,
+    format: &OutputFormat,
+) -> Result<()> {
+    let from_ms = from.and_then(parse_date_to_ms).unwrap_or(0);
+    let to_ms = to.and_then(parse_date_to_ms).unwrap_or(i64::MAX);
+    let rows = crate::usage_api::history::list(conn, from_ms, to_ms, account, limit)?;
+    let with_d = crate::usage_api::history::with_deltas(rows);
+
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&with_d)?);
+        }
+        OutputFormat::Csv => {
+            println!("ts,five_hour_pct,seven_day_pct,delta_5h,delta_7d,gap_secs");
+            for d in &with_d {
+                println!(
+                    "{},{:.1},{:.1},{},{},{}",
+                    iso_from_ms(d.snapshot.ts_ms),
+                    d.snapshot.five_hour_pct,
+                    d.snapshot.seven_day_pct,
+                    d.delta_5h.map(|x| format!("{:+.1}", x)).unwrap_or_default(),
+                    d.delta_7d.map(|x| format!("{:+.1}", x)).unwrap_or_default(),
+                    d.gap_secs.map(|s| s.to_string()).unwrap_or_default(),
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec!["ts (UTC)", "5h %", "Δ5h", "7d %", "Δ7d", "gap"]);
+            for d in &with_d {
+                let delta_5h_cell = match d.delta_5h {
+                    None => Cell::new("—"),
+                    Some(x) if x > 0.0 => Cell::new(format!("+{:.1}", x)).fg(Color::Yellow),
+                    Some(x) if x < 0.0 => Cell::new(format!("{:.1}", x)).fg(Color::Green),
+                    Some(_) => Cell::new("0.0"),
+                };
+                let delta_7d_cell = match d.delta_7d {
+                    None => Cell::new("—"),
+                    Some(x) if x > 0.0 => Cell::new(format!("+{:.1}", x)).fg(Color::Yellow),
+                    Some(x) if x < 0.0 => Cell::new(format!("{:.1}", x)).fg(Color::Green),
+                    Some(_) => Cell::new("0.0"),
+                };
+                let gap_str = match d.gap_secs {
+                    None => "—".into(),
+                    Some(s) if s < 60 => format!("{}s", s),
+                    Some(s) if s < 3600 => format!("{}m", s / 60),
+                    Some(s) => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+                };
+                table.add_row(vec![
+                    Cell::new(iso_from_ms(d.snapshot.ts_ms)),
+                    Cell::new(format!("{:.1}%", d.snapshot.five_hour_pct)),
+                    delta_5h_cell,
+                    Cell::new(format!("{:.1}%", d.snapshot.seven_day_pct)),
+                    delta_7d_cell,
+                    Cell::new(gap_str),
+                ]);
+            }
+            println!("{table}");
+            if with_d.is_empty() {
+                println!("(нет snapshots — запустите `agent-usage usage` для первого fetch)");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Команда: usage — реальные % из OAuth endpoint.
 pub fn usage_cmd(
     refresh: bool,
     ttl: i64,
     account: Option<&str>,
+    history: bool,
+    from: Option<&str>,
+    to: Option<&str>,
+    limit: usize,
     format: &OutputFormat,
 ) -> Result<()> {
     let conn = schema::open_index()?;
@@ -1182,6 +1260,10 @@ pub fn usage_cmd(
         Some(a) => Some(a.to_string()),
         None => detection::detect_current().map(|i| i.id),
     };
+
+    if history {
+        return usage_history_cmd(&conn, account_id.as_deref(), from, to, limit, format);
+    }
 
     let effective_ttl = if refresh { 0 } else { ttl };
     let cached =
