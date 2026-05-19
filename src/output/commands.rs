@@ -1101,6 +1101,142 @@ fn render_oneline(
     format!("[{}] {}", &account_id[..account_id.len().min(8)], tmux)
 }
 
+/// Распарсить размер: "220M" → 220_000_000, "100k" → 100_000, "12345" → 12345.
+pub fn parse_token_count(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        anyhow::bail!("пустое значение");
+    }
+    let (num_part, mult): (&str, u64) = match s.chars().last() {
+        Some(c) if c.eq_ignore_ascii_case(&'k') => (&s[..s.len() - 1], 1_000),
+        Some(c) if c == 'M' => (&s[..s.len() - 1], 1_000_000),
+        Some(c) if c == 'm' => (&s[..s.len() - 1], 1_000_000),
+        Some(c) if c.eq_ignore_ascii_case(&'g') => (&s[..s.len() - 1], 1_000_000_000),
+        _ => (s, 1),
+    };
+    let n: f64 = num_part
+        .parse()
+        .map_err(|_| anyhow::anyhow!("не могу распарсить число: {}", s))?;
+    Ok((n * mult as f64).round() as u64)
+}
+
+/// Команда: ceiling — show или set manual override.
+pub fn ceiling_cmd(
+    account: Option<&str>,
+    set: Option<&str>,
+    notes: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+
+    let account_id: String = match account {
+        Some(a) => a.to_string(),
+        None => match detection::detect_current() {
+            Some(info) => info.id,
+            None => anyhow::bail!("не удалось определить аккаунт. Используйте --account."),
+        },
+    };
+
+    // SET режим
+    if let Some(set_str) = set {
+        let value = parse_token_count(set_str)?;
+        conn.execute(
+            "INSERT INTO plan_overrides
+             (account_id, weekly_ceiling_tokens, source, set_at, notes)
+             VALUES (?, ?, 'manual', datetime('now'), ?)
+             ON CONFLICT(account_id) DO UPDATE SET
+                weekly_ceiling_tokens = excluded.weekly_ceiling_tokens,
+                source = excluded.source,
+                set_at = excluded.set_at,
+                notes = excluded.notes",
+            rusqlite::params![account_id, value as i64, notes],
+        )?;
+        eprintln!(
+            "[ceiling] account {} → manual override: {} tokens/week",
+            account_id, value
+        );
+        return Ok(());
+    }
+
+    // SHOW режим — узнать current plan и resolve ceiling.
+    let plan_str: Option<String> = conn
+        .query_row(
+            "SELECT plan FROM accounts WHERE id = ?",
+            rusqlite::params![account_id],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    let plan = plan_str
+        .as_deref()
+        .map(crate::account::plan::Plan::parse)
+        .unwrap_or(crate::account::plan::Plan::Unknown);
+    let (ceiling, source) = limits_engine::resolve_ceiling(&conn, &account_id, plan)?;
+
+    // Также подтянем set_at и notes если есть override row
+    let override_meta: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT set_at, notes FROM plan_overrides WHERE account_id = ?",
+            rusqlite::params![account_id],
+            |r| Ok((r.get(0)?, r.get(1).ok())),
+        )
+        .ok();
+
+    match format {
+        OutputFormat::Json => {
+            let v = serde_json::json!({
+                "account_id": account_id,
+                "plan": plan,
+                "ceiling": ceiling,
+                "source": source,
+                "set_at": override_meta.as_ref().map(|(s, _)| s),
+                "notes": override_meta.as_ref().and_then(|(_, n)| n.clone()),
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        _ => {
+            println!("account:   {}", account_id);
+            println!("plan:      {}", plan);
+            match (ceiling, source) {
+                (Some(c), Some(src)) => {
+                    println!("ceiling:   {} tokens/week", format_token_count(c));
+                    println!("source:    {}", src);
+                    if src == "default-community" {
+                        println!();
+                        println!("⚠  Это community-estimate, не официальная цифра Anthropic.");
+                        println!("   Узнайте свой реальный ceiling через `claude` → /status,");
+                        println!("   затем: agent-usage ceiling --set <число>");
+                    }
+                    if let Some((set_at, notes)) = override_meta {
+                        println!("set_at:    {}", set_at);
+                        if let Some(n) = notes {
+                            println!("notes:     {}", n);
+                        }
+                    }
+                }
+                _ => {
+                    println!("ceiling:   неизвестен (Plan::Unknown, нет override)");
+                    println!();
+                    println!("Используйте: agent-usage ceiling --set <число>");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn format_token_count(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}G ({})", n as f64 / 1e9, n)
+    } else if n >= 1_000_000 {
+        format!("{:.0}M ({})", n as f64 / 1e6, n)
+    } else if n >= 1_000 {
+        format!("{:.0}K ({})", n as f64 / 1e3, n)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Команда: одна snapshot tmux activity. Под --dry-run только печатает.
 pub fn activity_collect(dry_run: bool) -> Result<()> {
     let panes = tmux_poller::poll()?;
@@ -2812,5 +2948,50 @@ fn print_tool_response_stats_csv(stats: &[ToolResponseToolStats]) {
             s.p90_chars / 35 * 10,
             s.pct_exceeds_28k,
         );
+    }
+}
+
+#[cfg(test)]
+mod calib_tests {
+    use super::*;
+
+    #[test]
+    fn parse_plain_number() {
+        assert_eq!(parse_token_count("12345").unwrap(), 12345);
+        assert_eq!(parse_token_count("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_k_suffix() {
+        assert_eq!(parse_token_count("100k").unwrap(), 100_000);
+        assert_eq!(parse_token_count("100K").unwrap(), 100_000);
+        assert_eq!(parse_token_count("1.5k").unwrap(), 1500);
+    }
+
+    #[test]
+    fn parse_m_suffix() {
+        assert_eq!(parse_token_count("44M").unwrap(), 44_000_000);
+        assert_eq!(parse_token_count("220M").unwrap(), 220_000_000);
+        assert_eq!(parse_token_count("1.5M").unwrap(), 1_500_000);
+    }
+
+    #[test]
+    fn parse_g_suffix() {
+        assert_eq!(parse_token_count("1g").unwrap(), 1_000_000_000);
+        assert_eq!(parse_token_count("2.5G").unwrap(), 2_500_000_000);
+    }
+
+    #[test]
+    fn parse_invalid_returns_err() {
+        assert!(parse_token_count("").is_err());
+        assert!(parse_token_count("not a number").is_err());
+        assert!(parse_token_count("12X").is_err()); // unknown suffix → fails number parse
+    }
+
+    #[test]
+    fn format_uses_appropriate_suffix() {
+        assert_eq!(format_token_count(500), "500");
+        assert_eq!(format_token_count(1500), "2K (1500)");
+        assert_eq!(format_token_count(220_000_000), "220M (220000000)");
     }
 }

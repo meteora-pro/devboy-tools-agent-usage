@@ -243,6 +243,19 @@ fn main() -> Result<()> {
         Commands::Statusline { account, format } => {
             output::commands::statusline_cmd(account.as_deref(), &format)?;
         }
+        Commands::Ceiling {
+            account,
+            set,
+            notes,
+            format,
+        } => {
+            output::commands::ceiling_cmd(
+                account.as_deref(),
+                set.as_deref(),
+                notes.as_deref(),
+                &format,
+            )?;
+        }
         Commands::Activity { action } => match action {
             cli::ActivityAction::Collect { dry_run } => {
                 output::commands::activity_collect(dry_run)?;

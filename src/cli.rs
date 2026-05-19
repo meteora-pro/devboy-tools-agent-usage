@@ -332,6 +332,30 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Управление weekly ceiling: show / set manual override.
+    ///
+    /// Без флагов — показать текущий ceiling и его источник (manual /
+    /// calibrated / default-community).
+    /// С --set — записать manual override (например после узнавания точной
+    /// цифры через интерактивный /status в Claude Code).
+    Ceiling {
+        /// Account override (по умолчанию — detect_current()).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Установить manual ceiling. Понимает суффиксы: 44M, 220M, 100k.
+        #[arg(long)]
+        set: Option<String>,
+
+        /// Опциональная заметка к override.
+        #[arg(long)]
+        notes: Option<String>,
+
+        /// Формат вывода (для show).
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Аккаунты Claude Code в индексе.
     ///
     /// По умолчанию list. `--switches` показывает историю переключений.
