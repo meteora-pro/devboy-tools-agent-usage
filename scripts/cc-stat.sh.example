@@ -13,7 +13,7 @@ set -e
 BIN="${AGENT_USAGE_BIN:-$HOME/.local/bin/agent-usage}"
 OUTPUT_CACHE="/tmp/cc-stat-output-$USER.cache"
 INDEX_LOCK="/tmp/cc-stat-index-$USER.lock"
-OUTPUT_TTL=5     # секунд: насколько часто статус-бар реально обновляется
+OUTPUT_TTL=30    # секунд: насколько часто обновляется CC статус (лимиты меняются медленно)
 INDEX_TTL=30     # секунд: насколько часто пересканируем JSONL на новые turns
 
 # 1. Если output cache свежий — вернуть его и выйти.
