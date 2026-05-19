@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -80,6 +80,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 4 {
         apply_v4(conn)?;
+    }
+    if current < 5 {
+        apply_v5(conn)?;
     }
 
     Ok(())
@@ -229,6 +232,41 @@ CREATE TABLE IF NOT EXISTS plan_overrides (
 );
 "#;
 
+/// Миграция v5 — таблица `oauth_usage_snapshots` для истории OAuth endpoint.
+///
+/// Один snapshot = один успешный fetch /api/oauth/usage. Используется для:
+/// - real-time показа в statusline (last snapshot)
+/// - trend analysis (delta между snapshots)
+/// - reconciliation с local JSONL tokens (oauth.T7)
+fn apply_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V5)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (5, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V5: &str = r#"
+CREATE TABLE IF NOT EXISTS oauth_usage_snapshots (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms                   INTEGER NOT NULL,
+    account_id              TEXT,
+    five_hour_pct           REAL    NOT NULL,
+    five_hour_resets_at     TEXT,
+    seven_day_pct           REAL    NOT NULL,
+    seven_day_resets_at     TEXT,
+    seven_day_sonnet_pct    REAL,
+    extra_used_credits      REAL,
+    extra_monthly_limit     REAL,
+    extra_currency          TEXT,
+    FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_usage_ts          ON oauth_usage_snapshots(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_oauth_usage_account_ts  ON oauth_usage_snapshots(account_id, ts_ms);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +294,7 @@ mod tests {
         for required in [
             "account_switches",
             "accounts",
+            "oauth_usage_snapshots",
             "parsed_files",
             "plan_overrides",
             "schema_versions",
