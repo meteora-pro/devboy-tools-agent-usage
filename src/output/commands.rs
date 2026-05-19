@@ -1052,12 +1052,20 @@ fn render_tmux(
         ),
     };
 
+    // Width-stable: marker = '*' если ceiling default-community (приблизительный),
+    // иначе пробел. Это сохраняет одинаковую ширину строки независимо от source.
     let weekly_str = match weekly {
         Some(u) => match u.percent {
-            Some(p) => format!("W:{:>5.1}%", p),
-            None => "W: ---".to_string(),
+            Some(p) => {
+                let marker = match u.ceiling_source.as_deref() {
+                    Some("default-community") => "*",
+                    _ => " ",
+                };
+                format!("W:{:>5.1}%{}", p, marker)
+            }
+            None => "W: --- ".to_string(),
         },
-        None => "W: ---".to_string(),
+        None => "W: --- ".to_string(),
     };
 
     format!(

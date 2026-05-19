@@ -8,7 +8,9 @@ Reads JSONL logs from `~/.claude/projects/`, optionally correlates with [Activit
 
 - **Incremental SQLite index** — 2 GB of JSONL → 50 MB DB, cold ~10 sec, warm ~50 ms
 - **5h rate-limit blocks** — Anthropic-style sliding blocks with burn rate + projection
-- **Weekly limits** — % usage per account against plan ceiling (Pro/Max5/Max20)
+- **Weekly limits** — % usage per account against plan ceiling (Pro/Max5/Max20).
+  Three-tier ceiling: manual override > auto-calibrated from 429 > community estimate.
+  Statusline shows `*` for community estimates (`W:5.1%*`)
 - **Account detection** — auto-discovered from `~/.claude/.credentials.json` (no JWT parsing,
   no tokens stored — only SipHash of refresh token)
 - **Account switching** — heuristic detection of credential changes between indexer runs
@@ -255,6 +257,34 @@ Per-session biome classification by assistant turn count (matches
 | Fish | ≥10 | 🐟 |
 | Shrimp | ≥3 | 🦐 |
 | Plankton | <3 | 🦠 |
+
+### `ceiling` — Honest Weekly Ceiling
+
+Three-tier ceiling resolution:
+
+| Source | When |
+|--------|------|
+| `manual` | Set via `ceiling --set N` after checking `/status` in Claude Code |
+| `calibrated` | Auto-detected from `rate_limit_error` events in JSONL |
+| `default-community` | Hardcoded fallback from ccusage / community estimates |
+
+```bash
+devboy-tools-agent-usage ceiling                            # show current
+devboy-tools-agent-usage ceiling --set 220M --notes "..."   # manual override
+devboy-tools-agent-usage ceiling --account ID -f json       # specific account
+```
+
+⚠ **The default-community ceilings (Pro=44M, Max5=88M, Max20=220M) are NOT official Anthropic numbers.**
+They're educated guesses from community tools like ccusage. Anthropic publishes ceilings as "~N hours
+of typical use", not raw token counts. If you want accuracy:
+
+1. Open Claude Code: `claude`
+2. Run `/status` — note the percentage shown
+3. Compute reverse: ceiling = (your tokens this week) / (their percentage / 100)
+4. Set it: `agent-usage ceiling --set 220M`
+
+In tmux statusline, `W:5.1%*` (with asterisk) signals default-community. After manual override,
+asterisk disappears: `W:5.1% `.
 
 ### `statusline` — Compact tmux Status
 
