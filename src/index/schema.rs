@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -77,6 +77,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 3 {
         apply_v3(conn)?;
+    }
+    if current < 4 {
+        apply_v4(conn)?;
     }
 
     Ok(())
@@ -198,6 +201,34 @@ CREATE INDEX IF NOT EXISTS idx_tmux_activity_ts      ON tmux_activity(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_tmux_activity_session ON tmux_activity(session, ts_ms);
 "#;
 
+/// Миграция v4 — таблица `plan_overrides` для honest ceiling tracking.
+///
+/// Source levels:
+///   manual            — пользователь установил через `limits ceiling --set N`
+///   calibrated        — auto-detected из 429 rate_limit_error в JSONL
+///   default-community — fallback из hardcoded ccusage-style оценок
+///
+/// limits engine читает override first, иначе использует plan.weekly_token_ceiling().
+fn apply_v4(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V4)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (4, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS plan_overrides (
+    account_id            TEXT    PRIMARY KEY,
+    weekly_ceiling_tokens INTEGER NOT NULL,
+    source                TEXT    NOT NULL,    -- manual | calibrated | default-community
+    set_at                TEXT    NOT NULL,
+    notes                 TEXT,
+    FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +257,7 @@ mod tests {
             "account_switches",
             "accounts",
             "parsed_files",
+            "plan_overrides",
             "schema_versions",
             "tmux_activity",
             "turns",
