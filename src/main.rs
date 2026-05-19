@@ -257,6 +257,19 @@ fn main() -> Result<()> {
                 &format,
             )?;
         }
+        Commands::Reconcile {
+            account,
+            from,
+            to,
+            format,
+        } => {
+            output::commands::reconcile_cmd(
+                account.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                &format,
+            )?;
+        }
         Commands::Usage {
             refresh,
             ttl,

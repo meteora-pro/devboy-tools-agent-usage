@@ -75,16 +75,17 @@ pub fn list(
 /// Обогатить список snapshots delta-values относительно предыдущего snapshot.
 pub fn with_deltas(snapshots: Vec<SnapshotRow>) -> Vec<SnapshotWithDelta> {
     let mut out = Vec::with_capacity(snapshots.len());
-    let mut prev: Option<&SnapshotRow> = None;
-    let mut prev_owned: Option<SnapshotRow> = None;
-    for s in snapshots {
-        let (delta_5h, delta_7d, gap) = match prev {
-            None => (None, None, None),
-            Some(p) => (
+    for i in 0..snapshots.len() {
+        let s = &snapshots[i];
+        let (delta_5h, delta_7d, gap) = if i == 0 {
+            (None, None, None)
+        } else {
+            let p = &snapshots[i - 1];
+            (
                 Some(s.five_hour_pct - p.five_hour_pct),
                 Some(s.seven_day_pct - p.seven_day_pct),
                 Some((s.ts_ms - p.ts_ms) / 1000),
-            ),
+            )
         };
         out.push(SnapshotWithDelta {
             snapshot: s.clone(),
@@ -92,8 +93,6 @@ pub fn with_deltas(snapshots: Vec<SnapshotRow>) -> Vec<SnapshotWithDelta> {
             delta_7d,
             gap_secs: gap,
         });
-        prev_owned = Some(s);
-        prev = prev_owned.as_ref();
     }
     out
 }

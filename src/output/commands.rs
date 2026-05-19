@@ -1169,6 +1169,114 @@ pub fn parse_token_count(s: &str) -> Result<u64> {
     Ok((n * mult as f64).round() as u64)
 }
 
+/// Команда: reconcile — сопоставление local vs endpoint.
+pub fn reconcile_cmd(
+    account: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let conn = schema::open_index()?;
+
+    let account_id: Option<String> = match account {
+        Some(a) => Some(a.to_string()),
+        None => detection::detect_current().map(|i| i.id),
+    };
+
+    let from_ms = from.and_then(parse_date_to_ms).unwrap_or(0);
+    let to_ms = to.and_then(parse_date_to_ms).unwrap_or(i64::MAX);
+
+    let report =
+        crate::usage_api::reconcile::compute(&conn, from_ms, to_ms, account_id.as_deref())?;
+
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        OutputFormat::Csv => {
+            println!("from,to,duration_secs,delta_5h_pct,delta_7d_pct,local_tokens,tokens_per_pct_7d,drift");
+            for i in &report.intervals {
+                println!(
+                    "{},{},{},{:+.2},{:+.2},{},{},{}",
+                    iso_from_ms(i.from_ts_ms),
+                    iso_from_ms(i.to_ts_ms),
+                    i.duration_secs,
+                    i.delta_5h_pct,
+                    i.delta_7d_pct,
+                    i.local_tokens,
+                    i.tokens_per_pct_7d
+                        .map(|x| format!("{:.0}", x))
+                        .unwrap_or_default(),
+                    i.drift,
+                );
+            }
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            println!("account: {}", account_id.as_deref().unwrap_or("(all)"));
+            println!(
+                "Σ Δ7d: {:.1}%  Σ local tokens: {}  samples: {}  drift share: {:.1}%",
+                report.total_delta_7d_pct,
+                report.total_local_tokens,
+                report.samples_used,
+                report.drift_share_pct
+            );
+            if let Some(m) = report.mean_tokens_per_pct {
+                println!("Implied conversion: {:.0} tokens ≈ 1% weekly Δ", m);
+            }
+            println!();
+
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                "from (UTC)",
+                "gap",
+                "Δ7d %",
+                "local tokens",
+                "tok/%",
+                "note",
+            ]);
+
+            for i in &report.intervals {
+                let gap_str = match i.duration_secs {
+                    s if s < 60 => format!("{}s", s),
+                    s if s < 3600 => format!("{}m", s / 60),
+                    s => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+                };
+                let delta_cell = if i.delta_7d_pct > 0.0 {
+                    Cell::new(format!("+{:.2}", i.delta_7d_pct)).fg(Color::Yellow)
+                } else if i.delta_7d_pct < 0.0 {
+                    Cell::new(format!("{:.2}", i.delta_7d_pct)).fg(Color::Green)
+                } else {
+                    Cell::new("0.00")
+                };
+                let note = if i.drift {
+                    Cell::new("⚠ drift").fg(Color::Red)
+                } else {
+                    Cell::new("")
+                };
+                table.add_row(vec![
+                    Cell::new(iso_from_ms(i.from_ts_ms)),
+                    Cell::new(gap_str),
+                    delta_cell,
+                    Cell::new(i.local_tokens.to_string()),
+                    Cell::new(
+                        i.tokens_per_pct_7d
+                            .map(|x| format!("{:.0}", x))
+                            .unwrap_or_else(|| "—".into()),
+                    ),
+                    note,
+                ]);
+            }
+            println!("{table}");
+            if report.intervals.is_empty() {
+                println!("(нет пар snapshots — запустите `usage --refresh` несколько раз)");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Команда: история snapshots с delta-колонками.
 fn usage_history_cmd(
     conn: &rusqlite::Connection,

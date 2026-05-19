@@ -332,6 +332,28 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Reconciliation: сопоставить local JSONL tokens с endpoint utilization %.
+    ///
+    /// Показывает: какая часть Δ% endpoint объясняется работой с этой машины,
+    /// сколько local tokens = 1% utilization, моменты drift (другие машины тратили).
+    Reconcile {
+        /// Account (по умолчанию detect_current).
+        #[arg(long)]
+        account: Option<String>,
+
+        /// Начальная дата (YYYY-MM-DD).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
+
     /// Real-time usage из Anthropic OAuth /api/oauth/usage.
     ///
     /// Те же проценты что показывает /status внутри Claude Code.
