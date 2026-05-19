@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -74,6 +74,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 2 {
         apply_v2(conn)?;
+    }
+    if current < 3 {
+        apply_v3(conn)?;
     }
 
     Ok(())
@@ -159,6 +162,42 @@ CREATE TABLE IF NOT EXISTS account_switches (
 CREATE INDEX IF NOT EXISTS idx_switches_ts ON account_switches(ts_ms);
 "#;
 
+/// Миграция v3 — таблица `tmux_activity` для tmux-based focus tracking.
+///
+/// Записывается в результате периодического polling tmux state. Каждый snapshot
+/// = одна строка per pane (так удобнее для аналитики; alternative — JSON массив
+/// per snapshot, но это сложнее GROUP BY).
+///
+/// Семантика: pane_active=1 в exactly одной строке per (session, window, ts) —
+/// активный pane в этот момент. idle_ms — best-effort; NULL если из SSH/tmux
+/// мы не можем дотянуться до GUI session.
+fn apply_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V3)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (3, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS tmux_activity (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms        INTEGER NOT NULL,         -- момент snapshot
+    session      TEXT    NOT NULL,         -- имя tmux session (main, work, ...)
+    window_idx   INTEGER NOT NULL,
+    window_name  TEXT,
+    pane_idx     INTEGER NOT NULL,
+    pane_active  INTEGER NOT NULL,         -- 1/0
+    command      TEXT,                     -- claude / vim / cargo / bash / ...
+    cwd          TEXT,                     -- pane_current_path
+    idle_ms      INTEGER                   -- NULL если AFK не определён
+);
+
+CREATE INDEX IF NOT EXISTS idx_tmux_activity_ts      ON tmux_activity(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_tmux_activity_session ON tmux_activity(session, ts_ms);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +227,7 @@ mod tests {
             "accounts",
             "parsed_files",
             "schema_versions",
+            "tmux_activity",
             "turns",
         ] {
             assert!(
