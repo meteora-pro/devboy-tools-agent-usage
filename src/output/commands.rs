@@ -975,10 +975,18 @@ pub fn statusline_cmd(account: Option<&str>, format: &StatuslineFormat) -> Resul
         .ok()
         .flatten();
 
-    // Weekly usage
+    // Weekly usage (fallback на calibration если OAuth недоступен)
     let anchor = weekly::anchor_ms();
     let win = weekly::current_window(anchor);
     let weekly = limits_engine::usage_for(&conn, &account_id, win.clone()).ok();
+
+    // OAuth-based real % (priority). Cache 120s — за это время в БД snapshot живёт.
+    let oauth_acct = if account_id != "(none)" {
+        Some(account_id.as_str())
+    } else {
+        None
+    };
+    let oauth = crate::usage_api::cache::fetch_cached(&conn, 120, oauth_acct).ok();
 
     // Plan
     let plan: String = conn
@@ -998,18 +1006,28 @@ pub fn statusline_cmd(account: Option<&str>, format: &StatuslineFormat) -> Resul
                 "account_id": account_id,
                 "plan": plan,
                 "active_block": active,
-                "weekly": weekly,
+                "weekly_calibrated": weekly,
+                "oauth_usage": oauth.as_ref().map(|c| serde_json::json!({
+                    "five_hour_pct": c.usage.five_hour.utilization,
+                    "seven_day_pct": c.usage.seven_day.utilization,
+                    "seven_day_sonnet_pct": c.usage.seven_day_sonnet.as_ref().map(|s| s.utilization),
+                    "source": format!("{:?}", c.source),
+                    "ts_ms": c.ts_ms,
+                })),
             });
             println!("{}", serde_json::to_string_pretty(&v)?);
         }
         StatuslineFormat::Raw => {
             println!(
                 "{}",
-                render_oneline(&account_id, &plan, &active, &weekly, now_ms)
+                render_oneline(&account_id, &plan, &active, &weekly, oauth.as_ref(), now_ms)
             );
         }
         StatuslineFormat::Tmux => {
-            println!("{}", render_tmux(&active, &weekly, &plan, now_ms));
+            println!(
+                "{}",
+                render_tmux(&active, &weekly, oauth.as_ref(), &plan, now_ms)
+            );
         }
     }
     Ok(())
@@ -1024,11 +1042,14 @@ fn print_placeholder(format: &StatuslineFormat) {
 }
 
 /// Width-stable строка для tmux. Формат:
-///   "EMOJI  $1257  ⏰2h28m  W:4.9%  Max20"
-/// где EMOJI = 🟢/🟡/🟠/🔴 в зависимости от burn rate.
+///   "EMOJI  6k/m  $81  ⏰4h55m  5h:18% W:44%  Max20"
+///
+/// 5h:N% и W:N% — реальные числа из OAuth /api/oauth/usage (если доступен).
+/// Если OAuth недоступен — fallback на calibration-based weekly с маркером *.
 fn render_tmux(
     active: &Option<Block>,
     weekly: &Option<limits_engine::WeeklyUsage>,
+    oauth: Option<&crate::usage_api::cache::CachedUsage>,
     plan: &str,
     now_ms: i64,
 ) -> String {
@@ -1052,25 +1073,44 @@ fn render_tmux(
         ),
     };
 
-    // Width-stable: marker = '*' если ceiling default-community (приблизительный),
-    // иначе пробел. Это сохраняет одинаковую ширину строки независимо от source.
-    let weekly_str = match weekly {
-        Some(u) => match u.percent {
-            Some(p) => {
-                let marker = match u.ceiling_source.as_deref() {
-                    Some("default-community") => "*",
-                    _ => " ",
-                };
-                format!("W:{:>5.1}%{}", p, marker)
-            }
-            None => "W: --- ".to_string(),
-        },
-        None => "W: --- ".to_string(),
+    // Two-section usage: 5h% + W% из OAuth endpoint (real).
+    // Fallback на calibration weekly с маркером '*' если OAuth недоступен.
+    let (five_str, weekly_str) = match oauth {
+        Some(c) => {
+            let fh = c.usage.five_hour.utilization;
+            let sd = c.usage.seven_day.utilization;
+            // Source marker: ! если stale (старый cache, fetch упал недавно).
+            let marker = match c.source {
+                crate::usage_api::cache::UsageSource::Stale => "!",
+                _ => " ",
+            };
+            (
+                format!("5h:{:>4.1}%", fh),
+                format!("W:{:>4.1}%{}", sd, marker),
+            )
+        }
+        None => {
+            // Fallback на calibration-based weekly (с маркером *).
+            let fallback = match weekly {
+                Some(u) => match u.percent {
+                    Some(p) => {
+                        let marker = match u.ceiling_source.as_deref() {
+                            Some("default-community") => "*",
+                            _ => " ",
+                        };
+                        format!("W:{:>4.1}%{}", p, marker)
+                    }
+                    None => "W: --- ".to_string(),
+                },
+                None => "W: --- ".to_string(),
+            };
+            ("5h: ---".to_string(), fallback)
+        }
     };
 
     format!(
-        "{} {} {} {} {} {}",
-        emoji, burn_str, cost_str, time_left, weekly_str, plan
+        "{} {} {} {} {} {} {}",
+        emoji, burn_str, cost_str, time_left, five_str, weekly_str, plan
     )
 }
 
@@ -1103,9 +1143,10 @@ fn render_oneline(
     plan: &str,
     active: &Option<Block>,
     weekly: &Option<limits_engine::WeeklyUsage>,
+    oauth: Option<&crate::usage_api::cache::CachedUsage>,
     now_ms: i64,
 ) -> String {
-    let tmux = render_tmux(active, weekly, plan, now_ms);
+    let tmux = render_tmux(active, weekly, oauth, plan, now_ms);
     format!("[{}] {}", &account_id[..account_id.len().min(8)], tmux)
 }
 
