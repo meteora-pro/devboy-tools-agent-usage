@@ -14,7 +14,7 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::client::{self, ExtraUsage, UsageApiError, UsageBucket, UsageResponse};
+use super::client::{self, ExtraUsage, UsageBucket, UsageResponse};
 
 /// Источник данных в результате.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

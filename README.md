@@ -11,6 +11,15 @@ Reads JSONL logs from `~/.claude/projects/`, optionally correlates with [Activit
 - **OAuth usage** — real `5h%` / `7d%` from Anthropic's `/api/oauth/usage` endpoint,
   the same numbers shown by `/status` inside Claude Code. No guessing ceilings.
   Cached 120s in SQLite, statusline shows live values.
+- **Reconciliation** — local JSONL tokens vs endpoint Δ%: empirical
+  tokens-per-% conversion, drift detection (when endpoint grows but local doesn't —
+  signal of another machine / Web UI consuming the same account's quota).
+- **Multi-host indexing** — `index --host macbook --path /custom/path` to merge
+  JSONL archives from other machines into the same SQLite for cross-machine
+  reconciliation.
+- **tmux activity** — `activity collect|watch|report` replaces ActivityWatch
+  for terminal-focused work: pane/command/cwd snapshots + best-effort idle
+  detection via `loginctl`.
 - **Weekly limits (legacy fallback)** — three-tier ceiling (manual / calibrated / community)
   used only when OAuth endpoint is unavailable. Statusline marks fallback with `*`.
 - **Account detection** — auto-discovered from `~/.claude/.credentials.json` (no JWT parsing,
@@ -259,6 +268,57 @@ Per-session biome classification by assistant turn count (matches
 | Fish | ≥10 | 🐟 |
 | Shrimp | ≥3 | 🦐 |
 | Plankton | <3 | 🦠 |
+
+### `activity` — Tmux-based Focus Tracking
+
+Replaces ActivityWatch when working in terminal. Three subcommands:
+
+```bash
+agent-usage activity collect [--dry-run]     # одна snapshot
+agent-usage activity watch [--interval 10]   # daemon, snapshot каждые N сек
+agent-usage activity report [--from DATE] [--top N] -f FMT
+```
+
+Snapshots include: session, window, pane (active flag), `pane_current_command`
+(`claude` / `vim` / `bash`), `pane_current_path`, best-effort `idle_ms`
+(from `loginctl IdleSinceHint`).
+
+Output example (`report`):
+```
+Range: 2026-05-19 08:02 → 2026-05-19 08:25  (6 snapshots)
+
+Top commands (по активным pane'ам):
+  claude   36 (66.7%) ████████████████████████████████████████
+  bash     12 (22.2%) █████████████
+  btop      6 (11.1%) ███████
+
+Idle (5+ мин): 6 / 6 = 100.0%
+```
+
+For continuous tracking, run watch in background or as a systemd-user unit:
+```bash
+agent-usage activity watch --interval 10 &
+```
+
+### `reconcile` — Local Tokens ↔ Endpoint %
+
+Pairs each successive OAuth snapshot to compute the empirical `tokens-per-%`
+conversion and detect *drift* (endpoint grows while local stays flat — another
+machine ate quota):
+
+```bash
+agent-usage reconcile [--from DATE] [--account ID] -f FMT
+```
+
+Output:
+```
+Σ Δ7d: 12.3%  Σ local tokens: 1450000  samples: 5  drift share: 20.0%
+Implied conversion: 117886 tokens ≈ 1% weekly Δ
+```
+
+This is **the** way to know how much your machine actually contributes vs other
+sources (Web UI, other laptops). Run `usage --refresh` periodically (or rely on
+statusline cache) to build the snapshot history first.
 
 ### `usage` — Real Utilization from OAuth API ★ Recommended
 

@@ -375,6 +375,19 @@ src/
 │   ├── mod.rs
 │   └── engine.rs              # 6-biome (Whale/.../Plankton) per session
 │
+├── tmux_activity/             # ★ Tmux focus tracking (v0.6)
+│   ├── mod.rs
+│   ├── poller.rs              # snapshot tmux state via list-panes
+│   ├── idle.rs                # best-effort AFK via loginctl
+│   └── store.rs               # INSERT в tmux_activity
+│
+├── usage_api/                 # ★ OAuth /api/oauth/usage (v0.6)
+│   ├── mod.rs
+│   ├── client.rs              # HTTP fetch
+│   ├── cache.rs               # 120s file cache + DB persist
+│   ├── history.rs             # snapshot history + Δ
+│   └── reconcile.rs           # local tokens vs endpoint %
+│
 ├── activity/                  # ActivityWatch integration
 │   ├── mod.rs
 │   ├── models.rs              # AppCategory, BrowserCategory
@@ -424,3 +437,46 @@ src/
 ```
 
 Cold: ~10s on 2 GB JSONL. Warm: ~50 ms. tmux refresh: ~5 ms (cache hit).
+
+## v0.6 Additions
+
+### OAuth Usage Pipeline
+
+```
+~/.claude/.credentials.json (accessToken)
+        │
+        ▼  usage_api::client::fetch_usage()
+api.anthropic.com/api/oauth/usage  (Authorization: Bearer ...)
+        │
+        ▼  usage_api::cache::fetch_cached(ttl=120s)
+oauth_usage_snapshots table (history for trends + reconcile)
+        │
+        ▼  render_tmux → 5h:N% W:N% (real)
+        │
+        ▼  reconcile vs local turns → tokens-per-% + drift
+```
+
+### Tmux Activity Pipeline (alternative to ActivityWatch)
+
+```
+tmux list-panes -a -F "..."  +  loginctl IdleSinceHint
+        │                                │
+        └──────────────┬─────────────────┘
+                       ▼
+              tmux_activity::poller + idle
+                       │
+                       ▼  activity collect | watch
+              tmux_activity table (snapshots per pane)
+                       │
+                       ▼  activity report
+              top commands / sessions / idle %
+                       │
+                       ▼  correlation::tmux_source
+              FocusStats compatible with engine
+```
+
+### Multi-host
+
+`parsed_files.host` + `turns.host` columns. CLI: `index --host macbook --path ...`.
+Позволяет merge JSONL архивов с разных машин в одну БД для cross-machine
+reconciliation.
