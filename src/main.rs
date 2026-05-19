@@ -12,6 +12,7 @@ mod correlation;
 mod index;
 mod limits;
 mod output;
+mod tmux_activity;
 
 use anyhow::Result;
 use clap::Parser;
