@@ -243,6 +243,17 @@ fn main() -> Result<()> {
         Commands::Statusline { account, format } => {
             output::commands::statusline_cmd(account.as_deref(), &format)?;
         }
+        Commands::Activity { action } => match action {
+            cli::ActivityAction::Collect { dry_run } => {
+                output::commands::activity_collect(dry_run)?;
+            }
+            cli::ActivityAction::Watch { interval: _ } => {
+                anyhow::bail!("watch not yet implemented (tmux.T5)");
+            }
+            cli::ActivityAction::Report { .. } => {
+                anyhow::bail!("report not yet implemented (tmux.T6)");
+            }
+        },
         Commands::Index { full, quiet } => {
             output::commands::index_cmd(&config, full, quiet)?;
         }

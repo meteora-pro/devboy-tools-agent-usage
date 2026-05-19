@@ -21,6 +21,7 @@ use crate::index::{indexer, schema};
 use crate::limits::engine as limits_engine;
 use crate::limits::weekly::{self, WeeklyWindow};
 use crate::output::{json, table, timeline};
+use crate::tmux_activity::{idle as tmux_idle, poller as tmux_poller, store as tmux_store};
 
 /// Загрузить и построить сессии с прогресс-баром
 fn load_sessions(config: &Config) -> Result<Vec<ClaudeSession>> {
@@ -1098,6 +1099,41 @@ fn render_oneline(
 ) -> String {
     let tmux = render_tmux(active, weekly, plan, now_ms);
     format!("[{}] {}", &account_id[..account_id.len().min(8)], tmux)
+}
+
+/// Команда: одна snapshot tmux activity. Под --dry-run только печатает.
+pub fn activity_collect(dry_run: bool) -> Result<()> {
+    let panes = tmux_poller::poll()?;
+    let idle_ms = tmux_idle::current_idle_ms();
+    let now_ms = Utc::now().timestamp_millis();
+
+    if panes.is_empty() {
+        eprintln!("[activity] tmux server не запущен или нет pane'ов");
+        return Ok(());
+    }
+
+    if dry_run {
+        println!("ts_ms = {}", now_ms);
+        println!("idle_ms = {:?}", idle_ms);
+        println!("panes ({}):", panes.len());
+        for p in &panes {
+            println!(
+                "  {}/{}.{} active={} cmd={:<10} cwd={}",
+                p.session, p.window_idx, p.pane_idx, p.pane_active, p.command, p.cwd,
+            );
+        }
+        return Ok(());
+    }
+
+    let conn = schema::open_index()?;
+    let inserted = tmux_store::insert_snapshot(&conn, now_ms, &panes, idle_ms)?;
+    eprintln!(
+        "[activity] inserted={} idle_ms={:?} db={}",
+        inserted,
+        idle_ms,
+        schema::index_db_path()?.display(),
+    );
+    Ok(())
 }
 
 /// Команда: biome aquarium (🐋🦈🐬🐟🦐🦠).

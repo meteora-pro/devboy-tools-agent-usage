@@ -1,3 +1,4 @@
+#![allow(clippy::large_enum_variant)]
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -289,6 +290,12 @@ pub enum Commands {
         format: OutputFormat,
     },
 
+    /// Сбор и анализ tmux activity (focus tracking без ActivityWatch).
+    Activity {
+        #[command(subcommand)]
+        action: ActivityAction,
+    },
+
     /// Компактная сводка для tmux status-bar (5h блок + weekly % + plan).
     ///
     /// Width-stable: при разной нагрузке ширина строки сохраняется.
@@ -424,6 +431,43 @@ pub enum TaskSortBy {
     Time,
     Sessions,
     Recent,
+}
+
+#[derive(Subcommand)]
+pub enum ActivityAction {
+    /// Снять single snapshot tmux state и записать в БД.
+    Collect {
+        /// Не записывать в БД, только напечатать результат (dry-run).
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Long-running daemon: периодически снимает snapshot.
+    /// Запускается отдельным процессом (например через systemd-user).
+    Watch {
+        /// Интервал между snapshot в секундах.
+        #[arg(short, long, default_value = "10")]
+        interval: u64,
+    },
+
+    /// Отчёт по собранной активности.
+    Report {
+        /// Начальная дата (YYYY-MM-DD).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конечная дата.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Сколько top commands показать.
+        #[arg(short, long, default_value = "10")]
+        top: usize,
+
+        /// Формат вывода.
+        #[arg(short, long, default_value = "table")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
