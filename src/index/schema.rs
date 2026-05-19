@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -83,6 +83,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 5 {
         apply_v5(conn)?;
+    }
+    if current < 6 {
+        apply_v6(conn)?;
     }
 
     Ok(())
@@ -265,6 +268,26 @@ CREATE TABLE IF NOT EXISTS oauth_usage_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_oauth_usage_ts          ON oauth_usage_snapshots(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_oauth_usage_account_ts  ON oauth_usage_snapshots(account_id, ts_ms);
+"#;
+
+/// Миграция v6 — multi-host support. Добавляем column `host` в parsed_files
+/// и turns, чтобы различать данные с разных машин (например распакованный
+/// архив macbook + текущий titan).
+fn apply_v6(conn: &Connection) -> Result<()> {
+    // SQLite не позволяет добавить NOT NULL column без default. Используем default 'local'.
+    conn.execute_batch(SCHEMA_V6)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (6, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V6: &str = r#"
+ALTER TABLE parsed_files ADD COLUMN host TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE turns        ADD COLUMN host TEXT NOT NULL DEFAULT 'local';
+
+CREATE INDEX IF NOT EXISTS idx_turns_host_ts ON turns(host, ts_ms);
 "#;
 
 #[cfg(test)]

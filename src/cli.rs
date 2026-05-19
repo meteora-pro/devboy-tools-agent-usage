@@ -483,6 +483,17 @@ pub enum Commands {
         /// Тихий режим — только финальная сводка на одной строке (для cron / tmux wrapper).
         #[arg(long, short)]
         quiet: bool,
+
+        /// Имя хоста для multi-host setup (default "local"). Например при индексации
+        /// распакованного архива с другой машины: --host macbook.
+        #[arg(long, default_value = "local")]
+        host: String,
+
+        /// Кастомный путь к JSONL директории (по умолчанию ~/.claude/projects).
+        /// Удобно для индексации архива с другой машины:
+        ///   --host macbook --path /tmp/macbook-extract/.claude/projects
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
     },
 
     /// Установить skill для AI-агентов (Claude Code, Cursor, Windsurf, Cline, Copilot)

@@ -79,7 +79,19 @@ struct FileWatermark {
 /// Если текущий аккаунт определяется (через ENV или credentials.json), он
 /// записывается в `accounts` и проставляется новым turn'ам. Иначе turns
 /// сохраняются с `account_id = NULL` — заполнится позже через `accounts assign`.
+///
+/// Host = "local" по умолчанию. Для индексации архивов с других машин
+/// передавайте `host="macbook"` и т.д.
 pub fn index_all(conn: &mut Connection, claude_projects_dir: &Path) -> Result<IndexStats> {
+    index_all_for_host(conn, claude_projects_dir, "local")
+}
+
+/// Версия с явным host именем.
+pub fn index_all_for_host(
+    conn: &mut Connection,
+    claude_projects_dir: &Path,
+    host: &str,
+) -> Result<IndexStats> {
     let mut stats = IndexStats::default();
     let files = discover_jsonl_files(claude_projects_dir).context("discover JSONL")?;
     stats.files_scanned = files.len();
@@ -107,7 +119,8 @@ pub fn index_all(conn: &mut Connection, claude_projects_dir: &Path) -> Result<In
     }
 
     for file_info in files {
-        if let Err(e) = index_one_file(conn, &file_info, current_account.as_ref(), &mut stats) {
+        if let Err(e) = index_one_file(conn, &file_info, current_account.as_ref(), host, &mut stats)
+        {
             stats.files_errored += 1;
             eprintln!("Warning: пропускаем {} ({})", file_info.path.display(), e);
         }
@@ -120,6 +133,7 @@ fn index_one_file(
     conn: &mut Connection,
     file_info: &JsonlFileInfo,
     current_account: Option<&AccountInfo>,
+    host: &str,
     stats: &mut IndexStats,
 ) -> Result<()> {
     let path = &file_info.path;
@@ -230,16 +244,17 @@ fn index_one_file(
             Ok(Some(rec)) => {
                 tx.execute(
                     "INSERT INTO turns
-                     (session_id, project, ts_ms, model, account_id,
+                     (session_id, project, ts_ms, model, account_id, host,
                       tokens_input, tokens_output, tokens_cache_create, tokens_cache_read,
                       cost_usd)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         rec.session_id,
                         project,
                         rec.ts_ms,
                         rec.model,
                         current_account.map(|a| a.id.as_str()),
+                        host,
                         rec.input as i64,
                         rec.output as i64,
                         rec.cache_create as i64,
@@ -259,18 +274,20 @@ fn index_one_file(
 
     // 5. Update watermark в той же транзакции.
     tx.execute(
-        "INSERT INTO parsed_files (path, mtime_ns, size_bytes, last_offset, parsed_at)
-         VALUES (?, ?, ?, ?, datetime('now'))
+        "INSERT INTO parsed_files (path, mtime_ns, size_bytes, last_offset, parsed_at, host)
+         VALUES (?, ?, ?, ?, datetime('now'), ?)
          ON CONFLICT(path) DO UPDATE SET
             mtime_ns = excluded.mtime_ns,
             size_bytes = excluded.size_bytes,
             last_offset = excluded.last_offset,
-            parsed_at = excluded.parsed_at",
+            parsed_at = excluded.parsed_at,
+            host = excluded.host",
         params![
             path_str,
             current_mtime_ns,
             current_size,
             current_offset as i64,
+            host,
         ],
     )?;
 

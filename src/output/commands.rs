@@ -2322,29 +2322,44 @@ fn iso_from_ms(ms: i64) -> String {
 
 /// Команда: обновить SQLite-индекс по JSONL логам.
 ///
-/// При `full=true` очищаем `parsed_files` и `turns` — следующая итерация будет
-/// холодным проходом. Иначе использует watermark из `parsed_files`.
-pub fn index_cmd(config: &Config, full: bool, quiet: bool) -> Result<()> {
+/// При `full=true` очищаем `parsed_files` и `turns` для данного host — следующая
+/// итерация будет холодным проходом. Иначе использует watermark.
+pub fn index_cmd(
+    config: &Config,
+    full: bool,
+    quiet: bool,
+    host: &str,
+    path: Option<&std::path::Path>,
+) -> Result<()> {
     let started = std::time::Instant::now();
 
     let mut conn = schema::open_index()?;
 
     if full {
         if !quiet {
-            eprintln!("[index] --full: очистка parsed_files и turns");
+            eprintln!("[index] --full: очистка для host='{}'", host);
         }
-        conn.execute("DELETE FROM turns", [])?;
-        conn.execute("DELETE FROM parsed_files", [])?;
+        conn.execute("DELETE FROM turns WHERE host = ?", rusqlite::params![host])?;
+        conn.execute(
+            "DELETE FROM parsed_files WHERE host = ?",
+            rusqlite::params![host],
+        )?;
     }
+
+    let projects_dir: &std::path::Path = match path {
+        Some(p) => p,
+        None => &config.claude_projects_dir,
+    };
 
     if !quiet {
         eprintln!(
-            "[index] директория: {}",
-            config.claude_projects_dir.display()
+            "[index] host='{}' директория: {}",
+            host,
+            projects_dir.display()
         );
     }
 
-    let stats = indexer::index_all(&mut conn, &config.claude_projects_dir)?;
+    let stats = indexer::index_all_for_host(&mut conn, projects_dir, host)?;
     let elapsed = started.elapsed();
 
     if quiet {

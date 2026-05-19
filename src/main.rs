@@ -307,8 +307,13 @@ fn main() -> Result<()> {
                 output::commands::activity_report(from.as_deref(), to.as_deref(), top, &format)?;
             }
         },
-        Commands::Index { full, quiet } => {
-            output::commands::index_cmd(&config, full, quiet)?;
+        Commands::Index {
+            full,
+            quiet,
+            host,
+            path,
+        } => {
+            output::commands::index_cmd(&config, full, quiet, &host, path.as_deref())?;
         }
         Commands::Install {
             global,
