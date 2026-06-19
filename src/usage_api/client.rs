@@ -1,8 +1,20 @@
 //! HTTP клиент для `/api/oauth/usage`.
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Десериализатор, который трактует и отсутствие поля, и явный `null` как
+/// `Default::default()`. Нужен потому что `#[serde(default)]` покрывает только
+/// отсутствие ключа, а usage-API стал слать `null` для неактивных полей
+/// (`monthly_limit`, `used_credits`, `currency` в `extra_usage`).
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 /// URL endpoint'а. Не публичный — может измениться без warning.
 pub const USAGE_API_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -29,14 +41,14 @@ pub struct UsageBucket {
 pub struct ExtraUsage {
     #[serde(default)]
     pub is_enabled: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub monthly_limit: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub used_credits: f64,
     /// Утилизация если applicable (может быть null).
     #[serde(default)]
     pub utilization: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub currency: String,
     #[serde(default)]
     pub disabled_reason: Option<String>,
@@ -225,6 +237,26 @@ mod tests {
         assert_eq!(r.seven_day.utilization, 2.5);
         assert!(r.seven_day_sonnet.is_none());
         assert!(r.extra_usage.is_none());
+    }
+
+    #[test]
+    fn parse_null_extra_usage_fields() {
+        // API шлёт null для неактивных полей extra_usage — не должно ронять парсинг.
+        let body = r#"{
+            "five_hour":{"utilization":5.0},
+            "seven_day":{"utilization":64.0},
+            "seven_day_opus":null,
+            "extra_usage":{"is_enabled":false,"monthly_limit":null,
+                "used_credits":null,"utilization":null,"currency":null,
+                "disabled_reason":"out_of_credits"}
+        }"#;
+        let r = parse_usage_response(body).unwrap();
+        let extra = r.extra_usage.as_ref().unwrap();
+        assert_eq!(extra.monthly_limit, 0.0);
+        assert_eq!(extra.used_credits, 0.0);
+        assert_eq!(extra.utilization, None);
+        assert_eq!(extra.currency, "");
+        assert_eq!(extra.disabled_reason.as_deref(), Some("out_of_credits"));
     }
 
     #[test]
