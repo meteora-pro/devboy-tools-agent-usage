@@ -41,6 +41,10 @@ pub struct ReconcileReport {
     pub mean_tokens_per_pct: Option<f64>,
     /// % интервалов которые были drift (другие машины тратили).
     pub drift_share_pct: f64,
+    /// cc-proxy наблюдений с failed/degraded запросами в окне (status≥400 / 0 / sse_error).
+    /// Часть «drift» может объясняться нашими же failed-запросами (квота потрачена,
+    /// local turn не создан), а не другими машинами. Эпик proxy-correlation.
+    pub transport_error_obs: i64,
 }
 
 const DRIFT_TOKEN_THRESHOLD: i64 = 1000;
@@ -118,6 +122,18 @@ pub fn compute(
         0.0
     };
 
+    // Transport-error drift: failed/degraded cc-proxy запросы в окне. proxy_observations
+    // может отсутствовать на старых индексах — COALESCE через optional query.
+    let transport_error_obs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM proxy_observations
+             WHERE ts_ms BETWEEN ? AND ?
+               AND (status >= 400 OR status = 0 OR sse_error IS NOT NULL)",
+            rusqlite::params![from_ms, to_ms],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
     Ok(ReconcileReport {
         intervals,
         total_delta_7d_pct: total_delta_7d,
@@ -125,6 +141,7 @@ pub fn compute(
         samples_used: tokens_per_pct_samples.len(),
         mean_tokens_per_pct,
         drift_share_pct,
+        transport_error_obs,
     })
 }
 
