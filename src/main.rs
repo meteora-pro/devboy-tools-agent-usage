@@ -12,6 +12,7 @@ mod correlation;
 mod index;
 mod limits;
 mod output;
+mod proxy;
 mod tmux_activity;
 mod usage_api;
 

@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -89,6 +89,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 7 {
         apply_v7(conn)?;
+    }
+    if current < 8 {
+        apply_v8(conn)?;
     }
 
     Ok(())
@@ -313,6 +316,61 @@ ALTER TABLE turns ADD COLUMN request_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_turns_request_id ON turns(request_id);
 "#;
 
+/// Миграция v8 — `proxy_observations` (HTTP-уровень cc-proxy) + LEFT-JOIN view.
+///
+/// Эпик proxy-correlation, Phase 1. Хранит ТОЛЬКО top-level транспортные скаляры
+/// из cc-proxy лога (никаких тел запроса/ответа — PII). Джойнится с `turns` по
+/// `(host, request_id)`. `request_id` NULLABLE — orphan-строки (ретраи/transport
+/// errors без дошедшего до транскрипта request_id) = сигнал троттлинга, не шум.
+/// UNIQUE по (host, request_id) частичный (только не-NULL) → идемпотентный re-ingest.
+fn apply_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V8)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (8, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V8: &str = r#"
+CREATE TABLE IF NOT EXISTS proxy_observations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    host              TEXT    NOT NULL DEFAULT 'local',
+    request_id        TEXT,                       -- Anthropic request-id (NULL для orphan/transport)
+    session_id        TEXT,                       -- x-claude-code-session-id
+    ts_ms             INTEGER NOT NULL,           -- момент СТАРТА запроса (proxy ts)
+    wait_ms           INTEGER,                    -- время в очереди семафора прокси
+    dur_ms            INTEGER,                    -- round-trip latency
+    inflight_at_start INTEGER,                    -- глубина конкурентности на старте
+    status            INTEGER,                    -- HTTP статус (0 = transport error)
+    sse_error         TEXT,                       -- overloaded_error и т.п. внутри SSE
+    model             TEXT,
+    cache_read        INTEGER,                    -- из usage ответа (caused attribution, НЕ биллинг)
+    cache_create      INTEGER
+);
+
+-- частичный UNIQUE: идемпотентный re-ingest строк с request_id; orphan-строки (NULL) множатся свободно
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_obs_reqid ON proxy_observations(host, request_id)
+    WHERE request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_proxy_obs_session ON proxy_observations(session_id, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_proxy_obs_ts      ON proxy_observations(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_proxy_obs_status  ON proxy_observations(status);
+
+-- LEFT JOIN view: турны обогащённые транспортом. НИКОГДА не INNER (теряет orphan-ретраи).
+CREATE VIEW IF NOT EXISTS v_turns_proxy AS
+SELECT t.*,
+       p.wait_ms           AS proxy_wait_ms,
+       p.dur_ms            AS proxy_dur_ms,
+       p.inflight_at_start AS proxy_inflight,
+       p.status            AS proxy_status,
+       p.sse_error         AS proxy_sse_error,
+       p.cache_read        AS proxy_cache_read,
+       p.cache_create      AS proxy_cache_create
+FROM turns t
+LEFT JOIN proxy_observations p
+       ON t.host = p.host AND t.request_id = p.request_id;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +401,7 @@ mod tests {
             "oauth_usage_snapshots",
             "parsed_files",
             "plan_overrides",
+            "proxy_observations",
             "schema_versions",
             "tmux_activity",
             "turns",

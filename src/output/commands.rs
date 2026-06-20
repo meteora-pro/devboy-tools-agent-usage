@@ -2360,6 +2360,18 @@ pub fn index_cmd(
     }
 
     let stats = indexer::index_all_for_host(&mut conn, projects_dir, host)?;
+
+    // cc-proxy транспортные наблюдения (эпик proxy-correlation). Отсутствие лога
+    // (mount не примонтирован) — не ошибка, просто пропускаем.
+    let proxy_log = crate::proxy::default_proxy_log();
+    let proxy_stats = match crate::proxy::ingest_proxy_log(&mut conn, &proxy_log, host) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Warning: ingest cc-proxy лога не удался ({})", e);
+            crate::proxy::ProxyIngestStats::default()
+        }
+    };
+
     let elapsed = started.elapsed();
 
     if quiet {
@@ -2373,6 +2385,7 @@ pub fn index_cmd(
     } else {
         eprintln!("[index] готово за {:.2}s", elapsed.as_secs_f64());
         eprintln!("[index] {}", stats.summary());
+        eprintln!("[index] {}", proxy_stats.summary());
 
         // Краткая аналитика — какой объём набрался
         let total_turns: i64 = conn
