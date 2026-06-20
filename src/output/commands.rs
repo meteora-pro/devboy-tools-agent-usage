@@ -2324,6 +2324,70 @@ fn iso_from_ms(ms: i64) -> String {
 ///
 /// При `full=true` очищаем `parsed_files` и `turns` для данного host — следующая
 /// итерация будет холодным проходом. Иначе использует watermark.
+/// Команда `proxy` — транспортная аналитика cc-proxy (эпик proxy-correlation).
+pub fn proxy_cmd(from: Option<&str>, to: Option<&str>) -> Result<()> {
+    use colored::Colorize;
+    let conn = schema::open_index()?;
+    let from_ms = from.and_then(parse_date_to_ms).unwrap_or(0);
+    let to_ms = to.and_then(parse_date_to_ms).unwrap_or(i64::MAX);
+
+    let rep = crate::proxy::correlation::transport_report(&conn, from_ms, to_ms)?;
+
+    if rep.n_obs == 0 {
+        println!(
+            "{}",
+            "Нет cc-proxy наблюдений в окне. Запусти трафик через cc-proxied.sh + `agent-usage index`."
+                .yellow()
+        );
+        return Ok(());
+    }
+
+    println!("{}", "═══ cc-proxy транспортная аналитика ═══".bold());
+    if let Some(c) = &rep.coverage {
+        let warn = if c.pct() < 50.0 { " ⚠ статы смещены к проксированным сессиям" } else { "" };
+        println!(
+            "coverage: {}/{} турнов с джойном ({:.0}%){}",
+            c.matched, c.total_turns, c.pct(), warn.dimmed()
+        );
+    }
+    println!("observations: {}", rep.n_obs);
+
+    println!("\n{}", "▸ latency / очередь".bold());
+    println!(
+        "  wait_ms (наша очередь):   p50={}  p95={}  max={}  Σ={:.1}s",
+        rep.wait_p50, rep.wait_p95, rep.wait_max, rep.sum_wait_ms as f64 / 1000.0
+    );
+    println!(
+        "  dur_ms  (round-trip):     p50={}  p95={}  Σ={:.1}s",
+        rep.dur_p50, rep.dur_p95, rep.sum_dur_ms as f64 / 1000.0
+    );
+
+    println!("\n{}", "▸ конкурентность / overload".bold());
+    println!("  peak inflight_at_start:   {}", rep.peak_inflight);
+    println!(
+        "  auth(401/403)={}  upstream(429/5xx)={}  hidden-overload(200+sse)={}  orphan-retries={}",
+        rep.auth_errors, rep.upstream_errors, rep.hidden_overload, rep.orphan_errors
+    );
+
+    println!("\n{}", "▸ re-cache (флагман: KV-кэш потерян из-за задержки)".bold());
+    if rep.recache_events == 0 {
+        println!("  {}", "0 событий — hold не убивает кэш в этом окне ✓".green());
+    } else {
+        println!(
+            "  events={}  оценка потерь=${:.2}  из них вина очереди=${:.2}",
+            rep.recache_events,
+            rep.recache_cost_usd,
+            rep.recache_queue_attributable_usd
+        );
+        println!(
+            "  {}",
+            "(оценка: TTL=300s assumption, Δ=1.15x база входа; re-cache = creation после gap+wait>TTL при тёплом prev)".dimmed()
+        );
+    }
+
+    Ok(())
+}
+
 pub fn index_cmd(
     config: &Config,
     full: bool,

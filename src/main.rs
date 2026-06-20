@@ -316,6 +316,9 @@ fn main() -> Result<()> {
         } => {
             output::commands::index_cmd(&config, full, quiet, &host, path.as_deref())?;
         }
+        Commands::Proxy { from, to } => {
+            output::commands::proxy_cmd(from.as_deref(), to.as_deref())?;
+        }
         Commands::Install {
             global,
             force,

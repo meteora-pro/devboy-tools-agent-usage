@@ -496,6 +496,22 @@ pub enum Commands {
         path: Option<std::path::PathBuf>,
     },
 
+    /// Транспортная аналитика cc-proxy: очередь, latency, конкурентность, overload, re-cache$.
+    ///
+    /// Джойнит cc-proxy наблюдения с турнами по request_id (эпик proxy-correlation).
+    /// Метрики, которых нет в транскрипте: wait_ms (очередь), dur_ms (round-trip),
+    /// inflight (конкурентность), sse_error (overloaded внутри 200), и оценка
+    /// re-cache$ — потери на cache-miss из-за задержек.
+    Proxy {
+        /// Начало окна YYYY-MM-DD (по умолчанию — всё)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Конец окна YYYY-MM-DD
+        #[arg(long)]
+        to: Option<String>,
+    },
+
     /// Установить skill для AI-агентов (Claude Code, Cursor, Windsurf, Cline, Copilot)
     Install {
         /// Установить глобально (только для Claude Code)
