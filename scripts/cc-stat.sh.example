@@ -45,6 +45,23 @@ else
     output=$("$BIN" statusline -f tmux 2>/dev/null || echo "⏸ cc-err")
 fi
 
+# 4b. cc-proxy конкурентность (если запущен через cc-proxied.sh — пишет cc-inflight).
+#     Формат файла: "<inflight> <queued>". Показываем ⇄N (+M ждут в очереди).
+#     mtime > 30s → прокси не пишет (упал/не запущен) → не показываем.
+INFLIGHT_FILE="${CC_PROXY_INFLIGHT:-$HOME/.cache/devboy-tmux/cc-inflight}"
+if [ -f "$INFLIGHT_FILE" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$INFLIGHT_FILE") ))
+    if [ "$age" -lt 30 ]; then
+        read -r inflight queued _ < "$INFLIGHT_FILE"
+        inflight=${inflight:-0}; queued=${queued:-0}
+        if [ "$queued" -gt 0 ]; then
+            output="$output ⇄${inflight}+${queued}"
+        else
+            output="$output ⇄${inflight}"
+        fi
+    fi
+fi
+
 # 5. Записать в output cache и вернуть.
 printf "%s" "$output" > "$OUTPUT_CACHE"
 printf "%s" "$output"
