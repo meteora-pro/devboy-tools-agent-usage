@@ -244,12 +244,13 @@ fn index_one_file(
             Ok(Some(rec)) => {
                 tx.execute(
                     "INSERT INTO turns
-                     (session_id, project, ts_ms, model, account_id, host,
+                     (session_id, request_id, project, ts_ms, model, account_id, host,
                       tokens_input, tokens_output, tokens_cache_create, tokens_cache_read,
                       cost_usd)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         rec.session_id,
+                        rec.request_id,
                         project,
                         rec.ts_ms,
                         rec.model,
@@ -379,6 +380,7 @@ fn calibrate_from_rate_limit(conn: &Connection, account_id: &str, ts_ms: i64) ->
 /// Минимальные данные turn'а, нужные для SQLite-индекса.
 struct ExtractedTurn {
     session_id: String,
+    request_id: Option<String>,
     ts_ms: i64,
     model: String,
     input: u64,
@@ -410,6 +412,14 @@ fn parse_assistant_event(line: &str) -> Result<Option<ExtractedTurn>> {
     if session_id.is_empty() {
         return Ok(None);
     }
+
+    // requestId — top-level поле assistant-события (Anthropic request-id),
+    // join-ключ с cc-proxy. Может отсутствовать у старых логов.
+    let request_id = v
+        .get("requestId")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
 
     let ts_str = v.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
     let ts_ms = match DateTime::parse_from_rfc3339(ts_str) {
@@ -471,6 +481,7 @@ fn parse_assistant_event(line: &str) -> Result<Option<ExtractedTurn>> {
 
     Ok(Some(ExtractedTurn {
         session_id,
+        request_id,
         ts_ms,
         model,
         input,
@@ -569,6 +580,48 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM parsed_files", [], |r| r.get(0))
             .unwrap();
         assert_eq!(watermark_count, 1);
+    }
+
+    #[test]
+    fn extracts_request_id_into_turns() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let db_path = tmp.path().join("idx.db");
+
+        let uuid = "99999999-9999-9999-9999-999999999999";
+        // одна строка с requestId, одна — без (старый формат).
+        let with_rid = serde_json::json!({
+            "type": "assistant", "sessionId": uuid, "requestId": "req_011TESTabc",
+            "timestamp": "2026-05-18T20:00:00Z",
+            "message": {"model": "claude-opus-4-8",
+                "usage": {"input_tokens": 100, "output_tokens": 50,
+                          "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+        })
+        .to_string();
+        let without_rid = assistant_line(uuid, "2026-05-18T20:01:00Z", "claude-opus-4-8", 10, 5);
+        let _ = make_fixture(&projects, "-p", uuid, &[&with_rid, &without_rid]);
+
+        let mut conn = open_index_at(&db_path).unwrap();
+        let stats = index_all(&mut conn, &projects).unwrap();
+        assert_eq!(stats.turns_inserted, 2);
+
+        let rid: Option<String> = conn
+            .query_row(
+                "SELECT request_id FROM turns WHERE tokens_input = 100",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rid.as_deref(), Some("req_011TESTabc"));
+
+        let null_rid: Option<String> = conn
+            .query_row(
+                "SELECT request_id FROM turns WHERE tokens_input = 10",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_rid, None, "старый формат без requestId → NULL");
     }
 
     #[test]

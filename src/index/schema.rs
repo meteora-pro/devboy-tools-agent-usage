@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Текущая версия схемы. Инкрементируется при добавлении миграций.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Путь к БД индекса в XDG cache dir.
 pub fn index_db_path() -> Result<PathBuf> {
@@ -86,6 +86,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 6 {
         apply_v6(conn)?;
+    }
+    if current < 7 {
+        apply_v7(conn)?;
     }
 
     Ok(())
@@ -290,6 +293,26 @@ ALTER TABLE turns        ADD COLUMN host TEXT NOT NULL DEFAULT 'local';
 CREATE INDEX IF NOT EXISTS idx_turns_host_ts ON turns(host, ts_ms);
 "#;
 
+/// Миграция v7 — `turns.request_id` (Anthropic request-id, join-ключ с cc-proxy).
+///
+/// Транскрипт несёт `requestId` у assistant-событий; cc-proxy логирует тот же id из
+/// HTTP-заголовка `request-id`. Колонка позволяет джойнить турны с proxy_observations
+/// (эпик proxy-correlation). NULL для исторических турнов и тех, у кого requestId нет.
+fn apply_v7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_V7)?;
+    conn.execute(
+        "INSERT INTO schema_versions (version, applied_at) VALUES (7, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+const SCHEMA_V7: &str = r#"
+ALTER TABLE turns ADD COLUMN request_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_turns_request_id ON turns(request_id);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,7 +368,12 @@ mod tests {
             .filter_map(Result::ok)
             .collect();
 
-        for required in ["idx_turns_account_ts", "idx_turns_session", "idx_turns_ts"] {
+        for required in [
+            "idx_turns_account_ts",
+            "idx_turns_session",
+            "idx_turns_ts",
+            "idx_turns_request_id",
+        ] {
             assert!(
                 indexes.contains(&required.to_string()),
                 "индекс {} должен существовать, актуальные: {:?}",
