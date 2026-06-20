@@ -54,6 +54,27 @@ HTTP-статус (401/429/502/529), `sse_error` (overloaded_error внутри 
 cache-vs-wait). Эмпирика на реальных данных: при текущей нагрузке hold НЕ портит кэш
 (потери при wait_ms=0, не от очереди). Нативная интеграция = этот эпик.
 
+## Статус (2026-06-20)
+
+| # | Статус | Коммит |
+|---|---|---|
+| 0 | ✅ done | turns.request_id, schema v7, 15 index-тестов |
+| 1 | ✅ done | src/proxy ingest+correlation, schema v8 proxy_observations + v_turns_proxy, 8 тестов |
+| 2 | ✅ done | `agent-usage proxy` + флагман re-cache$ + coverage% |
+| 3 | ✅ core | reconcile transport_error_obs (drift-split). Deferred: blocks/biome concurrency-аннотации (near-empty при текущем coverage) |
+| 4 | ✅ done | cc-stat.sh ⇄inflight(+queued) из cc-inflight |
+| 5 | ✅ producer | export_proxy_parquet.py. Cross-repo follow-up: skill-панели в `meteora/devboy-tools/.claude/skills/analyze-usage` |
+
+**Эмпирика на реальных данных:** re-cache queue-attributable = **$0.00** (hold не
+портит кэш), hidden-overload пойман (реальный `overloaded_error` в HTTP-200 SSE).
+Coverage растёт вперёд (request_id заполняется для новых турнов; для бэкфилла —
+`agent-usage index --full`).
+
+**Cross-repo / deferred follow-ups:**
+- skill-панели TRANSPORT RADAR / OVERLOAD TIMELINE (devboy-tools, gated на proxy.parquet)
+- blocks/biome concurrency-burst аннотации (Phase 3, когда coverage вырастет)
+- аддитивные колонки Queued/p95 Lat/Re-cache$ в `tasks`/`timeline` (Phase 2 polish)
+
 ## Источник дизайна
 
 Multi-agent workflow `improve-catch-collection` (synthesis от 2026-06-20). Карта
