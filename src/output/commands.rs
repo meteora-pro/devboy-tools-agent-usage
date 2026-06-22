@@ -157,7 +157,7 @@ pub fn sessions(
     let mut filtered = filter_sessions(&all_sessions, project, from, to);
 
     // Сортируем по дате (новые сверху) и ограничиваем
-    filtered.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    filtered.sort_by_key(|b| std::cmp::Reverse(b.start_time));
     filtered.truncate(limit);
 
     println!("Showing {} sessions\n", filtered.len());
@@ -642,10 +642,10 @@ pub fn tasks(
             task_stats.sort_by(|a, b| b.agent_time_secs.partial_cmp(&a.agent_time_secs).unwrap());
         }
         TaskSortBy::Sessions => {
-            task_stats.sort_by(|a, b| b.session_count.cmp(&a.session_count));
+            task_stats.sort_by_key(|b| std::cmp::Reverse(b.session_count));
         }
         TaskSortBy::Recent => {
-            task_stats.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+            task_stats.sort_by_key(|b| std::cmp::Reverse(b.last_seen));
         }
     }
 
@@ -1158,8 +1158,8 @@ pub fn parse_token_count(s: &str) -> Result<u64> {
     }
     let (num_part, mult): (&str, u64) = match s.chars().last() {
         Some(c) if c.eq_ignore_ascii_case(&'k') => (&s[..s.len() - 1], 1_000),
-        Some(c) if c == 'M' => (&s[..s.len() - 1], 1_000_000),
-        Some(c) if c == 'm' => (&s[..s.len() - 1], 1_000_000),
+        Some('M') => (&s[..s.len() - 1], 1_000_000),
+        Some('m') => (&s[..s.len() - 1], 1_000_000),
         Some(c) if c.eq_ignore_ascii_case(&'g') => (&s[..s.len() - 1], 1_000_000_000),
         _ => (s, 1),
     };
@@ -1352,6 +1352,7 @@ fn usage_history_cmd(
 }
 
 /// Команда: usage — реальные % из OAuth endpoint.
+#[allow(clippy::too_many_arguments)]
 pub fn usage_cmd(
     refresh: bool,
     ttl: i64,
@@ -1765,7 +1766,7 @@ pub fn activity_watch(interval_secs: u64) -> Result<()> {
         if panes.is_empty() {
             // tmux server не запущен — будем ждать пока поднимется.
             // Лог только редко, чтобы не шуметь.
-            if errors_streak % 30 == 0 {
+            if errors_streak.is_multiple_of(30) {
                 eprintln!("[activity watch] tmux server не отвечает (waiting)");
             }
             errors_streak = errors_streak.saturating_add(1);
@@ -1775,7 +1776,7 @@ pub fn activity_watch(interval_secs: u64) -> Result<()> {
                     snapshot_count += 1;
                     errors_streak = 0;
                     // Логируем каждые 60 итераций (по умолчанию = раз в 10 минут на interval=10s)
-                    if snapshot_count % 60 == 0 {
+                    if snapshot_count.is_multiple_of(60) {
                         eprintln!(
                             "[activity watch] {} snapshots, panes={} idle_ms={:?}",
                             snapshot_count, n, idle_ms
@@ -1927,6 +1928,7 @@ fn accounts_list(conn: &rusqlite::Connection, format: &OutputFormat) -> Result<(
          ) t ON t.account_id = a.id
          ORDER BY a.last_seen_ms DESC",
     )?;
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(
         String,
         Option<String>,
@@ -2344,10 +2346,17 @@ pub fn proxy_cmd(from: Option<&str>, to: Option<&str>) -> Result<()> {
 
     println!("{}", "═══ cc-proxy транспортная аналитика ═══".bold());
     if let Some(c) = &rep.coverage {
-        let warn = if c.pct() < 50.0 { " ⚠ статы смещены к проксированным сессиям" } else { "" };
+        let warn = if c.pct() < 50.0 {
+            " ⚠ статы смещены к проксированным сессиям"
+        } else {
+            ""
+        };
         println!(
             "coverage: {}/{} турнов с джойном ({:.0}%){}",
-            c.matched, c.total_turns, c.pct(), warn.dimmed()
+            c.matched,
+            c.total_turns,
+            c.pct(),
+            warn.dimmed()
         );
     }
     println!("observations: {}", rep.n_obs);
@@ -2355,11 +2364,16 @@ pub fn proxy_cmd(from: Option<&str>, to: Option<&str>) -> Result<()> {
     println!("\n{}", "▸ latency / очередь".bold());
     println!(
         "  wait_ms (наша очередь):   p50={}  p95={}  max={}  Σ={:.1}s",
-        rep.wait_p50, rep.wait_p95, rep.wait_max, rep.sum_wait_ms as f64 / 1000.0
+        rep.wait_p50,
+        rep.wait_p95,
+        rep.wait_max,
+        rep.sum_wait_ms as f64 / 1000.0
     );
     println!(
         "  dur_ms  (round-trip):     p50={}  p95={}  Σ={:.1}s",
-        rep.dur_p50, rep.dur_p95, rep.sum_dur_ms as f64 / 1000.0
+        rep.dur_p50,
+        rep.dur_p95,
+        rep.sum_dur_ms as f64 / 1000.0
     );
 
     println!("\n{}", "▸ конкурентность / overload".bold());
@@ -2369,15 +2383,19 @@ pub fn proxy_cmd(from: Option<&str>, to: Option<&str>) -> Result<()> {
         rep.auth_errors, rep.upstream_errors, rep.hidden_overload, rep.orphan_errors
     );
 
-    println!("\n{}", "▸ re-cache (флагман: KV-кэш потерян из-за задержки)".bold());
+    println!(
+        "\n{}",
+        "▸ re-cache (флагман: KV-кэш потерян из-за задержки)".bold()
+    );
     if rep.recache_events == 0 {
-        println!("  {}", "0 событий — hold не убивает кэш в этом окне ✓".green());
+        println!(
+            "  {}",
+            "0 событий — hold не убивает кэш в этом окне ✓".green()
+        );
     } else {
         println!(
             "  events={}  оценка потерь=${:.2}  из них вина очереди=${:.2}",
-            rep.recache_events,
-            rep.recache_cost_usd,
-            rep.recache_queue_attributable_usd
+            rep.recache_events, rep.recache_cost_usd, rep.recache_queue_attributable_usd
         );
         println!(
             "  {}",
@@ -3000,7 +3018,6 @@ fn print_enrichment_correlation(points: &[EnrichmentPoint], enrichment_tools: &[
 }
 
 fn print_enrichment_json(points: &[EnrichmentPoint], buckets: &[(&str, f64, f64)]) {
-    #[allow(unused_variables)]
     use serde_json::json;
     let bucket_data: Vec<_> = buckets
         .iter()
@@ -3287,8 +3304,8 @@ fn print_tool_behavior_table(
                     .and_then(|m| m.get(followup))
                     .copied()
                     .unwrap_or(0);
-                let l_pct = if lc > 0 { l_cnt * 100 / lc } else { 0 };
-                let s_pct = if sc > 0 { s_cnt * 100 / sc } else { 0 };
+                let l_pct = (l_cnt * 100).checked_div(lc).unwrap_or(0);
+                let s_pct = (s_cnt * 100).checked_div(sc).unwrap_or(0);
 
                 let diff_color = if l_pct > s_pct + 10 {
                     Color::Yellow // чаще при большом ответе
@@ -3362,7 +3379,7 @@ fn print_tool_behavior_csv(
         let sc = small_count.get(tool).copied().unwrap_or(0);
         if let Some(map) = large_followups.get(tool) {
             for (followup, cnt) in map {
-                let pct = if lc > 0 { cnt * 100 / lc } else { 0 };
+                let pct = (cnt * 100).checked_div(lc).unwrap_or(0);
                 println!("{},large,{},{},{}", tool, followup, cnt, pct);
             }
         }
@@ -3458,7 +3475,7 @@ pub fn tool_response_stats(
         })
         .collect();
 
-    stats.sort_by(|a, b| b.count.cmp(&a.count));
+    stats.sort_by_key(|b| std::cmp::Reverse(b.count));
 
     match format {
         OutputFormat::Table => print_tool_response_stats_table(&stats),

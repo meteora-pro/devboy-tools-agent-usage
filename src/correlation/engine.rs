@@ -415,6 +415,7 @@ pub fn collect_terminal_focus_stats(
 /// Сложность: O(W' + P') вместо прежнего O(W' × A'), где:
 /// - W' — window events в диапазоне, P' — not-AFK интервалы в диапазоне,
 /// - A' — все AFK события (которые раньше сканировались per window event).
+#[allow(clippy::too_many_arguments)]
 fn accumulate_focus_for_range(
     window_events: &[AwWindowEvent],
     not_afk: &[(DateTime<Utc>, DateTime<Utc>)],

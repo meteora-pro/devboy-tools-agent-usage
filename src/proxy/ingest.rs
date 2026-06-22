@@ -186,7 +186,13 @@ pub fn ingest_proxy_log(
          ON CONFLICT(path) DO UPDATE SET
             mtime_ns=excluded.mtime_ns, size_bytes=excluded.size_bytes,
             last_offset=excluded.last_offset, parsed_at=excluded.parsed_at",
-        params![path_str, current_mtime_ns, current_size, offset as i64, host],
+        params![
+            path_str,
+            current_mtime_ns,
+            current_size,
+            offset as i64,
+            host
+        ],
     )?;
     tx.commit()?;
     Ok(stats)
@@ -225,8 +231,18 @@ mod tests {
         let log = dir.path().join("cc-proxy.jsonl");
         {
             let mut f = File::create(&log).unwrap();
-            writeln!(f, "{}", proxy_line(Some("req_A"), "sid1", "2026-06-20T01:00:00Z", 200, 50)).unwrap();
-            writeln!(f, "{}", proxy_line(None, "sid1", "2026-06-20T01:00:01Z", 502, 0)).unwrap(); // orphan
+            writeln!(
+                f,
+                "{}",
+                proxy_line(Some("req_A"), "sid1", "2026-06-20T01:00:00Z", 200, 50)
+            )
+            .unwrap();
+            writeln!(
+                f,
+                "{}",
+                proxy_line(None, "sid1", "2026-06-20T01:00:01Z", 502, 0)
+            )
+            .unwrap(); // orphan
             writeln!(f, r#"{{"path":"/","status":404}}"#).unwrap(); // проба — skip
         }
         let mut conn = open_index_at(&db).unwrap();

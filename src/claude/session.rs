@@ -91,7 +91,7 @@ pub struct McpCallInfo {
 impl McpCallInfo {
     /// Это follow-up запрос (chunk > 1)?
     pub fn is_follow_up(&self) -> bool {
-        self.chunk.map_or(false, |c| c > 1)
+        self.chunk.is_some_and(|c| c > 1)
     }
 }
 

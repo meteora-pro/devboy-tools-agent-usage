@@ -96,6 +96,7 @@ pub fn fetch_cached(
 
 /// Прочитать последний snapshot из БД, восстановить как UsageResponse.
 fn read_latest_snapshot(conn: &Connection) -> Result<Option<(i64, UsageResponse)>> {
+    #[allow(clippy::type_complexity)]
     let row: Option<(
         i64,
         f64,
@@ -136,31 +137,33 @@ fn read_latest_snapshot(conn: &Connection) -> Result<Option<(i64, UsageResponse)
         None => return Ok(None),
     };
 
-    let mut usage = UsageResponse::default();
-    usage.five_hour = UsageBucket {
-        utilization: row.1,
-        resets_at: row.2,
-    };
-    usage.seven_day = UsageBucket {
-        utilization: row.3,
-        resets_at: row.4,
-    };
-    if let Some(s) = row.5 {
-        usage.seven_day_sonnet = Some(UsageBucket {
+    let usage = UsageResponse {
+        five_hour: UsageBucket {
+            utilization: row.1,
+            resets_at: row.2,
+        },
+        seven_day: UsageBucket {
+            utilization: row.3,
+            resets_at: row.4,
+        },
+        seven_day_sonnet: row.5.map(|s| UsageBucket {
             utilization: s,
             resets_at: None,
-        });
-    }
-    if row.6.is_some() || row.7.is_some() {
-        usage.extra_usage = Some(ExtraUsage {
-            is_enabled: true,
-            used_credits: row.6.unwrap_or(0.0),
-            monthly_limit: row.7.unwrap_or(0.0),
-            currency: row.8.unwrap_or_default(),
-            utilization: None,
-            disabled_reason: None,
-        });
-    }
+        }),
+        extra_usage: if row.6.is_some() || row.7.is_some() {
+            Some(ExtraUsage {
+                is_enabled: true,
+                used_credits: row.6.unwrap_or(0.0),
+                monthly_limit: row.7.unwrap_or(0.0),
+                currency: row.8.unwrap_or_default(),
+                utilization: None,
+                disabled_reason: None,
+            })
+        } else {
+            None
+        },
+        ..Default::default()
+    };
 
     Ok(Some((row.0, usage)))
 }

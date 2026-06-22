@@ -105,7 +105,7 @@ pub fn compute_turn_agent_time(user_ts: DateTime<Utc>, assistant_ts: Option<Date
     match assistant_ts {
         Some(at) => {
             let ms = (at - user_ts).num_milliseconds() as f64 / 1000.0;
-            ms.max(0.0).min(MAX_TURN_AGENT_SECS)
+            ms.clamp(0.0, MAX_TURN_AGENT_SECS)
         }
         None => 0.0,
     }

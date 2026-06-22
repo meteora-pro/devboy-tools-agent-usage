@@ -35,7 +35,7 @@ impl PipelineInvocation {
         let follow_ups: std::collections::HashSet<u64> = self
             .calls
             .iter()
-            .filter(|c| c.chunk.map_or(false, |n| n > 1))
+            .filter(|c| c.chunk.is_some_and(|n| n > 1))
             .filter_map(|c| c.chunk)
             .collect();
         (if has_initial { 1 } else { 0 }) + follow_ups.len()
@@ -188,7 +188,7 @@ pub fn compute_tool_stats(invocations: &[PipelineInvocation]) -> Vec<ToolBehavio
         })
         .collect();
 
-    stats.sort_by(|a, b| b.total_invocations.cmp(&a.total_invocations));
+    stats.sort_by_key(|b| std::cmp::Reverse(b.total_invocations));
     stats
 }
 

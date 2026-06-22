@@ -82,10 +82,10 @@ pub struct TransportReport {
     // concurrency
     pub peak_inflight: i64,
     // errors
-    pub auth_errors: i64,        // 401/403
-    pub upstream_errors: i64,    // 429/5xx
-    pub hidden_overload: i64,    // status 200 + sse_error
-    pub orphan_errors: i64,      // request_id NULL + error status/sse_error (ретраи)
+    pub auth_errors: i64,     // 401/403
+    pub upstream_errors: i64, // 429/5xx
+    pub hidden_overload: i64, // status 200 + sse_error
+    pub orphan_errors: i64,   // request_id NULL + error status/sse_error (ретраи)
     // re-cache (флагман)
     pub recache_events: i64,
     pub recache_cost_usd: f64,
@@ -189,11 +189,13 @@ pub fn transport_report(conn: &Connection, from_ms: i64, to_ms: i64) -> Result<T
         let gap = cur.ts - prev.ts;
         let effective_gap = gap + cur.wait;
         if effective_gap > CACHE_TTL_MS && cur.cache_create > 0 && prev.cache_read > 0 {
-            let waste = cur.cache_create as f64 * CACHE_MISS_DELTA * input_price_per_tok(&cur.model);
+            let waste =
+                cur.cache_create as f64 * CACHE_MISS_DELTA * input_price_per_tok(&cur.model);
             rep.recache_events += 1;
             rep.recache_cost_usd += waste;
             if effective_gap > 0 {
-                rep.recache_queue_attributable_usd += waste * cur.wait as f64 / effective_gap as f64;
+                rep.recache_queue_attributable_usd +=
+                    waste * cur.wait as f64 / effective_gap as f64;
             }
         }
     }
